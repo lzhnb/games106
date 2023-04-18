@@ -690,7 +690,7 @@ public:
 
 	void loadAssets()
 	{
-		loadglTFFile(getAssetPath() + "models/FlightHelmet/glTF/FlightHelmet.gltf");
+		loadglTFFile(getAssetPath() + "buster_drone/busterDrone.gltf");
 	}
 
     void setupDescriptors()
