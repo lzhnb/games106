@@ -38,6 +38,7 @@ namespace vks
 		uint32_t queueFamilyCount;
 		vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, nullptr);
 		assert(queueFamilyCount > 0);
+		// 获取设备的队列族个数，然后分配数组存储队列族的 VkQueueFamilyProperties 对象
 		queueFamilyProperties.resize(queueFamilyCount);
 		vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, queueFamilyProperties.data());
 
@@ -46,6 +47,7 @@ namespace vks
 		vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &extCount, nullptr);
 		if (extCount > 0)
 		{
+			// 检查所需的扩展是否存在
 			std::vector<VkExtensionProperties> extensions(extCount);
 			if (vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &extCount, &extensions.front()) == VK_SUCCESS)
 			{
@@ -180,6 +182,7 @@ namespace vks
 		// Due to differing queue family configurations of Vulkan implementations this can be a bit tricky, especially if the application
 		// requests different queue types
 
+		// 逻辑设备的创建需要填写 VkDeviceQueueCreateInfo，用来描述针对一个队列族我们所需的队列数量
 		std::vector<VkDeviceQueueCreateInfo> queueCreateInfos{};
 
 		// Get queue family indices for the requested queue family types
@@ -187,6 +190,9 @@ namespace vks
 
 		const float defaultQueuePriority(0.0f);
 
+		// 找到支持各个功能（比如 VK_QUEUE_GRAPHICS_BIT）的队列族
+		// 同时还要赋予每个队列相应的优先级
+		// queueFamilyIndices.graphics 是队列族索引
 		// Graphics queue
 		if (requestedQueueTypes & VK_QUEUE_GRAPHICS_BIT)
 		{
@@ -250,6 +256,7 @@ namespace vks
 		if (useSwapChain)
 		{
 			// If the device will be used for presenting to a display via a swapchain we need to request the swapchain extension
+			// 用 VK_KHR_SWAPCHAIN_EXTENSION_NAME 宏来表示 VK_HKR_swapchain 扩展
 			deviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 		}
 
@@ -293,12 +300,14 @@ namespace vks
 				}
 			}
 
+			// 启用交换链扩展
 			deviceCreateInfo.enabledExtensionCount = (uint32_t)deviceExtensions.size();
 			deviceCreateInfo.ppEnabledExtensionNames = deviceExtensions.data();
 		}
 
 		this->enabledFeatures = enabledFeatures;
 
+		// 调用 vkCreateDevice 创建逻辑设备
 		VkResult result = vkCreateDevice(physicalDevice, &deviceCreateInfo, nullptr, &logicalDevice);
 		if (result != VK_SUCCESS) 
 		{

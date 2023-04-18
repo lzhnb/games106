@@ -100,6 +100,8 @@ void VulkanSwapChain::initSurface(uint32_t width, uint32_t height)
 	// Iterate over each queue to learn whether it supports presenting:
 	// Find a queue with present support
 	// Will be used to present the swap chain images to the windowing system
+	// 通过检查队列是否具有 VK_QUEUE_GRAPHICS_BIT 的同级循环调用 vkGetPhysicalDeviceSurfaceSupportKHR
+	// 函数来查找带有呈现图像到窗口表面能力的队列族。
 	std::vector<VkBool32> supportsPresent(queueCount);
 	for (uint32_t i = 0; i < queueCount; i++) 
 	{
@@ -160,11 +162,12 @@ void VulkanSwapChain::initSurface(uint32_t width, uint32_t height)
 	VK_CHECK_RESULT(fpGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, NULL));
 	assert(formatCount > 0);
 
-	std::vector<VkSurfaceFormatKHR> surfaceFormats(formatCount);
+	std::vector<VkSurfaceFormatKHR> surfaceFormats(formatCount); // 表面格式（像素格式，颜色空间）
 	VK_CHECK_RESULT(fpGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, surfaceFormats.data()));
 
 	// If the surface format list only includes one entry with VK_FORMAT_UNDEFINED,
 	// there is no preferred format, so we assume VK_FORMAT_B8G8R8A8_UNORM
+	// 选择合适的表面格式（颜色深度）
 	if ((formatCount == 1) && (surfaceFormats[0].format == VK_FORMAT_UNDEFINED))
 	{
 		colorFormat = VK_FORMAT_B8G8R8A8_UNORM;
@@ -235,7 +238,7 @@ void VulkanSwapChain::create(uint32_t *width, uint32_t *height, bool vsync, bool
 	VkSwapchainKHR oldSwapchain = swapChain;
 
 	// Get physical device surface properties and formats
-	VkSurfaceCapabilitiesKHR surfCaps;
+	VkSurfaceCapabilitiesKHR surfCaps; // 基础表面属性（交换链的最小戯最大图像数量，最小戯最大图像宽度、高度）
 	VK_CHECK_RESULT(fpGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &surfCaps));
 
 	// Get available present modes
@@ -243,7 +246,7 @@ void VulkanSwapChain::create(uint32_t *width, uint32_t *height, bool vsync, bool
 	VK_CHECK_RESULT(fpGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, NULL));
 	assert(presentModeCount > 0);
 
-	std::vector<VkPresentModeKHR> presentModes(presentModeCount);
+	std::vector<VkPresentModeKHR> presentModes(presentModeCount); // 可用的呈现模式
 	VK_CHECK_RESULT(fpGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, presentModes.data()));
 
 	VkExtent2D swapchainExtent = {};
@@ -268,6 +271,10 @@ void VulkanSwapChain::create(uint32_t *width, uint32_t *height, bool vsync, bool
 
 	// The VK_PRESENT_MODE_FIFO_KHR mode must always be present as per spec
 	// This mode waits for the vertical blank ("v-sync")
+	// 呈现模式（交换链中最重要的设置），决定了什么条件下图像才会显示到屏幕。
+	// 交换链变成一个先进先出的队列，每次从队列头部取出一张图像进行显示，应用程序渲染的
+	// 图像提交给交换链后，会被放在队列尾部。当队列为满时，应用程序需要进行等待。这一模式
+	// 非常类似现在常用的垂直同步。刷新显示的仕科也被叫做垂直回扫。
 	VkPresentModeKHR swapchainPresentMode = VK_PRESENT_MODE_FIFO_KHR;
 
 	// If v-sync is not requested, try to find a mailbox mode
@@ -276,11 +283,13 @@ void VulkanSwapChain::create(uint32_t *width, uint32_t *height, bool vsync, bool
 	{
 		for (size_t i = 0; i < presentModeCount; i++)
 		{
+			// 它
 			if (presentModes[i] == VK_PRESENT_MODE_MAILBOX_KHR)
 			{
 				swapchainPresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
 				break;
 			}
+			// 应用程序提交的图像会被立即传输到屏幕上，可能会导致撕裂现象
 			if (presentModes[i] == VK_PRESENT_MODE_IMMEDIATE_KHR)
 			{
 				swapchainPresentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
@@ -338,8 +347,8 @@ void VulkanSwapChain::create(uint32_t *width, uint32_t *height, bool vsync, bool
 	swapchainCI.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
 	swapchainCI.surface = surface;
 	swapchainCI.minImageCount = desiredNumberOfSwapchainImages;
-	swapchainCI.imageFormat = colorFormat;
-	swapchainCI.imageColorSpace = colorSpace;
+	swapchainCI.imageFormat = colorFormat; // 颜色格式
+	swapchainCI.imageColorSpace = colorSpace; // 色彩空间
 	swapchainCI.imageExtent = { swapchainExtent.width, swapchainExtent.height };
 	swapchainCI.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 	swapchainCI.preTransform = (VkSurfaceTransformFlagBitsKHR)preTransform;

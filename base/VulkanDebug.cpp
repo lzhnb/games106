@@ -68,7 +68,7 @@ namespace vks
 
 		void setupDebugging(VkInstance instance)
 		{
-
+			// 创建 vkCreateDebugUtilsMessengerEXT 对象并加载。加载后删除。
 			vkCreateDebugUtilsMessengerEXT = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT"));
 			vkDestroyDebugUtilsMessengerEXT = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT"));
 

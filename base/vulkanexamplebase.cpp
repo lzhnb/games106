@@ -25,6 +25,7 @@ VkResult VulkanExampleBase::createInstance(bool enableValidation)
 	this->settings.validation = true;
 #endif
 
+	// 应用信息
 	VkApplicationInfo appInfo = {};
 	appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
 	appInfo.pApplicationName = name.c_str();
@@ -91,6 +92,7 @@ VkResult VulkanExampleBase::createInstance(bool enableValidation)
 		}
 	}
 
+	// 定义实例的创建信息
 	VkInstanceCreateInfo instanceCreateInfo = {};
 	instanceCreateInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
 	instanceCreateInfo.pNext = NULL;
@@ -133,6 +135,8 @@ VkResult VulkanExampleBase::createInstance(bool enableValidation)
 				break;
 			}
 		}
+
+		// 决定是否指定全局校验层
 		if (validationLayerPresent) {
 			instanceCreateInfo.ppEnabledLayerNames = &validationLayerName;
 			instanceCreateInfo.enabledLayerCount = 1;
@@ -140,6 +144,7 @@ VkResult VulkanExampleBase::createInstance(bool enableValidation)
 			std::cerr << "Validation layer VK_LAYER_KHRONOS_validation not present, validation is disabled";
 		}
 	}
+	// 创建的实例
 	return vkCreateInstance(&instanceCreateInfo, nullptr, &instance);
 }
 
@@ -978,13 +983,13 @@ bool VulkanExampleBase::initVulkan()
 
 	// Physical device
 	uint32_t gpuCount = 0;
-	// Get number of available physical devices
+	// Get number of available physical devices（请求 GPU 显卡数量）
 	VK_CHECK_RESULT(vkEnumeratePhysicalDevices(instance, &gpuCount, nullptr));
 	if (gpuCount == 0) {
 		vks::tools::exitFatal("No device with Vulkan support found", -1);
 		return false;
 	}
-	// Enumerate devices
+	// Enumerate devices （存储 GPU 对象）
 	std::vector<VkPhysicalDevice> physicalDevices(gpuCount);
 	err = vkEnumeratePhysicalDevices(instance, &gpuCount, physicalDevices.data());
 	if (err) {
@@ -992,7 +997,7 @@ bool VulkanExampleBase::initVulkan()
 		return false;
 	}
 
-	// GPU selection
+	// GPU selection （选择第一个满足我们需求的 GPU）
 
 	// Select physical device to be used for the Vulkan example
 	// Defaults to the first device unless specified by command line
@@ -1023,6 +1028,7 @@ bool VulkanExampleBase::initVulkan()
 	physicalDevice = physicalDevices[selectedDevice];
 
 	// Store properties (including limits), features and memory properties of the physical device (so that examples can check against them)
+	// 获得更加详细的设备信息
 	vkGetPhysicalDeviceProperties(physicalDevice, &deviceProperties);
 	vkGetPhysicalDeviceFeatures(physicalDevice, &deviceFeatures);
 	vkGetPhysicalDeviceMemoryProperties(physicalDevice, &deviceMemoryProperties);
@@ -1043,9 +1049,15 @@ bool VulkanExampleBase::initVulkan()
 		vks::tools::exitFatal("Could not create Vulkan device: \n" + vks::tools::errorString(res), res);
 		return false;
 	}
+	// 获得逻辑设备
 	device = vulkanDevice->logicalDevice;
 
 	// Get a graphics queue from the device
+	// 获取指定队列族的队列句柄。参数依次是：
+	// - 逻辑设备对象
+	// - 队列族索引
+	// - 队列索引
+	// - 用来存储返回的队列句柄的内存地址
 	vkGetDeviceQueue(device, vulkanDevice->queueFamilyIndices.graphics, 0, &queue);
 
 	// Find a suitable depth format
