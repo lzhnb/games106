@@ -239,7 +239,8 @@ public:
             }
             if (glTFMaterial.values.find("metallicRoughnessTexture") != glTFMaterial.values.end())
             {
-                materials[i].metallicRoughnessTextureIndex = glTFMaterial.values["metallicRoughnessTexture"].TextureIndex();
+                materials[i].metallicRoughnessTextureIndex =
+                    glTFMaterial.values["metallicRoughnessTexture"].TextureIndex();
             }
             if (glTFMaterial.values.find("occlusionTexture") != glTFMaterial.values.end())
             {
@@ -447,6 +448,7 @@ public:
                                             &images[texture.imageIndex].descriptorSet,
                                             0,
                                             nullptr);
+                    // NOTE: 绘制
                     vkCmdDrawIndexed(commandBuffer, primitive.indexCount, 1, primitive.firstIndex, 0, 0);
                 }
             }
@@ -462,6 +464,7 @@ public:
     {
         // All vertices and indices are stored in single buffers, so we only need to bind once
         VkDeviceSize offsets[1] = {0};
+        // 绑定顶点缓冲和索引缓冲
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertices.buffer, offsets);
         vkCmdBindIndexBuffer(commandBuffer, indices.buffer, 0, VK_INDEX_TYPE_UINT32);
         // Render all nodes at top-level
@@ -544,6 +547,9 @@ public:
 
     void buildCommandBuffers()
     {
+        // 开始分配指令缓冲对象，使用它记录绘制指令。由于绘制操作是在每个帧缓冲上进行的，我们需要为交换链中的
+        // 每一个图像分配一个指令缓冲对象。为此，我们添加了一个数组作为成员变量来存储创建的 VkCommandBuffer 对象。
+        // 指令缓冲对象会在指令池对象被清除时自动被清楚，不需要我们显式地清除它。
         VkCommandBufferBeginInfo cmdBufInfo = vks::initializers::commandBufferBeginInfo();
 
         VkClearValue clearValues[2];
@@ -552,8 +558,9 @@ public:
         ;
         clearValues[1].depthStencil = {1.0f, 0};
 
+        // 指定使用的渲染流程对象
         VkRenderPassBeginInfo renderPassBeginInfo    = vks::initializers::renderPassBeginInfo();
-        renderPassBeginInfo.renderPass               = renderPass;
+        renderPassBeginInfo.renderPass               = renderPass; // 用于指定使用的渲染流程对象
         renderPassBeginInfo.renderArea.offset.x      = 0;
         renderPassBeginInfo.renderArea.offset.y      = 0;
         renderPassBeginInfo.renderArea.extent.width  = width;
@@ -561,23 +568,33 @@ public:
         renderPassBeginInfo.clearValueCount          = 2;
         renderPassBeginInfo.pClearValues             = clearValues;
 
+        // 视口用于描述被用来输出渲染结果的帧缓冲区域。
         const VkViewport viewport = vks::initializers::viewport((float)width, (float)height, 0.0f, 1.0f);
-        const VkRect2D   scissor  = vks::initializers::rect2D(width, height, 0, 0);
+        // 视口定义了图像到帧缓冲的映射关系，裁剪矩形定义了哪一区域的像素实际被存储在帧缓存。
+        // 任何位于裁剪矩形外的像素都会被光栅化程序丢弃。
+        const VkRect2D scissor = vks::initializers::rect2D(width, height, 0, 0);
 
         for (int32_t i = 0; i < drawCmdBuffers.size(); ++i)
         {
-            renderPassBeginInfo.framebuffer = frameBuffers[i];
+            renderPassBeginInfo.framebuffer = frameBuffers[i]; // 用于指定使用的帧缓冲对象
+            // 开始指令缓冲的记录操作，通过 cmdBufInfo 来指定一些有关指令缓冲的使用细节
             VK_CHECK_RESULT(vkBeginCommandBuffer(drawCmdBuffers[i], &cmdBufInfo));
+            // 所有可以记录指令到指令缓冲的函数的函数名都带有一个 vkCmd 前缀。
+            // 这类函数的第一个参数是用于记录指令的指令缓冲对象。第二个参数是使用的渲染流程的信息。
+            // 最后一个参数是用来指定渲染流程如何提供绘制指令的标记
+            // 开始一个渲染流程
             vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
             vkCmdSetViewport(drawCmdBuffers[i], 0, 1, &viewport);
             vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
             // Bind scene matrices descriptor to set 0
             vkCmdBindDescriptorSets(
                 drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
+            // 绑定图形管线，第二个参数用于指定管线对象是图形管线还是计算管线。
             vkCmdBindPipeline(
                 drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, wireframe ? pipelines.wireframe : pipelines.solid);
             glTFModel.draw(drawCmdBuffers[i], pipelineLayout);
             drawUI(drawCmdBuffers[i]);
+            // 结束渲染流程
             vkCmdEndRenderPass(drawCmdBuffers[i]);
             VK_CHECK_RESULT(vkEndCommandBuffer(drawCmdBuffers[i]));
         }
@@ -642,6 +659,7 @@ public:
 
         // Create host visible staging buffers (source)
         VK_CHECK_RESULT(
+            // 创建顶点缓冲 - 对应多边形网格的顶点
             vulkanDevice->createBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                                        vertexBufferSize,
@@ -650,6 +668,7 @@ public:
                                        vertexBuffer.data()));
         // Index data
         VK_CHECK_RESULT(
+            // 创建索引缓冲 - 对应多边形网格的三角面片
             vulkanDevice->createBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                                        indexBufferSize,
@@ -679,6 +698,7 @@ public:
         copyRegion.size = indexBufferSize;
         vkCmdCopyBuffer(copyCmd, indexStaging.buffer, glTFModel.indices.buffer, 1, &copyRegion);
 
+        // 提交指令缓冲
         vulkanDevice->flushCommandBuffer(copyCmd, queue, true);
 
         // Free staging resources
@@ -688,10 +708,7 @@ public:
         vkFreeMemory(device, indexStaging.memory, nullptr);
     }
 
-	void loadAssets()
-	{
-		loadglTFFile(getAssetPath() + "buster_drone/busterDrone.gltf");
-	}
+    void loadAssets() { loadglTFFile(getAssetPath() + "buster_drone/busterDrone.gltf"); }
 
     void setupDescriptors()
     {
@@ -723,7 +740,9 @@ public:
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0);
         VK_CHECK_RESULT(
             vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCI, nullptr, &descriptorSetLayouts.textures));
+
         // Pipeline layout using both descriptor sets (set 0 = matrices, set 1 = material)
+        // 管线布局
         std::array<VkDescriptorSetLayout, 2> setLayouts = {descriptorSetLayouts.matrices,
                                                            descriptorSetLayouts.textures};
         VkPipelineLayoutCreateInfo           pipelineLayoutCI =
@@ -757,28 +776,15 @@ public:
 
     void preparePipelines()
     {
-        VkPipelineInputAssemblyStateCreateInfo inputAssemblyStateCI =
-            vks::initializers::pipelineInputAssemblyStateCreateInfo(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0, VK_FALSE);
-        VkPipelineRasterizationStateCreateInfo rasterizationStateCI =
-            vks::initializers::pipelineRasterizationStateCreateInfo(
-                VK_POLYGON_MODE_FILL, VK_CULL_MODE_BACK_BIT, VK_FRONT_FACE_COUNTER_CLOCKWISE, 0);
-        VkPipelineColorBlendAttachmentState blendAttachmentStateCI =
-            vks::initializers::pipelineColorBlendAttachmentState(0xf, VK_FALSE);
-        VkPipelineColorBlendStateCreateInfo colorBlendStateCI =
-            vks::initializers::pipelineColorBlendStateCreateInfo(1, &blendAttachmentStateCI);
-        VkPipelineDepthStencilStateCreateInfo depthStencilStateCI =
-            vks::initializers::pipelineDepthStencilStateCreateInfo(VK_TRUE, VK_TRUE, VK_COMPARE_OP_LESS_OR_EQUAL);
-        VkPipelineViewportStateCreateInfo viewportStateCI = vks::initializers::pipelineViewportStateCreateInfo(1, 1, 0);
-        VkPipelineMultisampleStateCreateInfo multisampleStateCI =
-            vks::initializers::pipelineMultisampleStateCreateInfo(VK_SAMPLE_COUNT_1_BIT, 0);
-        const std::vector<VkDynamicState> dynamicStateEnables = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-        VkPipelineDynamicStateCreateInfo  dynamicStateCI      = vks::initializers::pipelineDynamicStateCreateInfo(
-            dynamicStateEnables.data(), static_cast<uint32_t>(dynamicStateEnables.size()), 0);
         // Vertex input bindings and attributes
+        // 定义顶点输入的绑定以及属性描述
+        // 绑定：数据之间的间距和数据是按逐顶点的方式还是按逐实例的方式进行组织
         const std::vector<VkVertexInputBindingDescription> vertexInputBindings = {
             vks::initializers::vertexInputBindingDescription(
                 0, sizeof(VulkanglTFModel::Vertex), VK_VERTEX_INPUT_RATE_VERTEX),
         };
+        // 属性描述：传递给顶点着色器的属性类型，用于将属性绑定到顶点着色器中的变量
+        // 这里的索引和 shader.vert 中的 layout(location = x) 要对应
         const std::vector<VkVertexInputAttributeDescription> vertexInputAttributes = {
             vks::initializers::vertexInputAttributeDescription(
                 0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(VulkanglTFModel::Vertex, pos)),    // Location 0: Position
@@ -794,28 +800,65 @@ public:
         };
         VkPipelineVertexInputStateCreateInfo vertexInputStateCI =
             vks::initializers::pipelineVertexInputStateCreateInfo();
+        vertexInputStateCI.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
         vertexInputStateCI.vertexBindingDescriptionCount   = static_cast<uint32_t>(vertexInputBindings.size());
         vertexInputStateCI.pVertexBindingDescriptions      = vertexInputBindings.data();
         vertexInputStateCI.vertexAttributeDescriptionCount = static_cast<uint32_t>(vertexInputAttributes.size());
         vertexInputStateCI.pVertexAttributeDescriptions    = vertexInputAttributes.data();
 
+        // 配置输入装配。顶点数据定义了哪种类型的几何图元，以及是否启用几何图元重启。
+        VkPipelineInputAssemblyStateCreateInfo inputAssemblyStateCI =
+            vks::initializers::pipelineInputAssemblyStateCreateInfo(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0, VK_FALSE);
+        // 视口和裁剪矩形需要组合在一起，定义为 VkPipelineViewportStateCreateInfo 结构体。
+        VkPipelineViewportStateCreateInfo viewportStateCI = vks::initializers::pipelineViewportStateCreateInfo(1, 1, 0);
+        // 光栅化程序将来自顶点着色器的顶点构成的几何图元转换为片段交由片段着色器着色。
+        VkPipelineRasterizationStateCreateInfo rasterizationStateCI =
+            vks::initializers::pipelineRasterizationStateCreateInfo(
+                VK_POLYGON_MODE_FILL, VK_CULL_MODE_BACK_BIT, VK_FRONT_FACE_COUNTER_CLOCKWISE, 0);
+        // 多重采样是一种组合多个不同多边形产生的片段的颜色来决定最终的像素颜色的技术，它可以一定程度上减少多边形边缘的走样现象。
+        VkPipelineMultisampleStateCreateInfo multisampleStateCI =
+            vks::initializers::pipelineMultisampleStateCreateInfo(VK_SAMPLE_COUNT_1_BIT, 0);
+        const std::vector<VkDynamicState> dynamicStateEnables = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        // 配置深度测试和模板测试。
+        VkPipelineDepthStencilStateCreateInfo depthStencilStateCI =
+            vks::initializers::pipelineDepthStencilStateCreateInfo(VK_TRUE, VK_TRUE, VK_COMPARE_OP_LESS_OR_EQUAL);
+        // 颜色混合设置。片段着色器返回的片段颜色需要和原来帧缓冲中对应像素的颜色进行混合。
+        // VkPipelineColorBlendAttachmentState 用来对每个绑定的帧缓冲进行单独的颜色混合配置。
+        VkPipelineColorBlendAttachmentState blendAttachmentStateCI =
+            vks::initializers::pipelineColorBlendAttachmentState(0xf, VK_FALSE);
+        // VkPipelineColorBlendStateCreateInfo 用来进行全局的颜色混合配置。
+        VkPipelineColorBlendStateCreateInfo colorBlendStateCI =
+            vks::initializers::pipelineColorBlendStateCreateInfo(1, &blendAttachmentStateCI);
+        // 配置动态状态。只有非常有限的管线状态可以在不重建管线的情况下进行动态修改。
+        // 这包括视口大小，线宽和混合常量。
+        VkPipelineDynamicStateCreateInfo dynamicStateCI = vks::initializers::pipelineDynamicStateCreateInfo(
+            dynamicStateEnables.data(), static_cast<uint32_t>(dynamicStateEnables.size()), 0);
+
+        // loadShader 第一个参数为二进制编码文件路径 第二个参数指定在管线处理哪一阶段被使用
         const std::array<VkPipelineShaderStageCreateInfo, 2> shaderStages = {
             loadShader(getHomeworkShadersPath() + "homework1/mesh.vert.spv", VK_SHADER_STAGE_VERTEX_BIT),
             loadShader(getHomeworkShadersPath() + "homework1/mesh.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT)};
 
+        // 定义图形管线结构体
         VkGraphicsPipelineCreateInfo pipelineCI = vks::initializers::pipelineCreateInfo(pipelineLayout, renderPass, 0);
         pipelineCI.pVertexInputState            = &vertexInputStateCI;
         pipelineCI.pInputAssemblyState          = &inputAssemblyStateCI;
-        pipelineCI.pRasterizationState          = &rasterizationStateCI;
-        pipelineCI.pColorBlendState             = &colorBlendStateCI;
-        pipelineCI.pMultisampleState            = &multisampleStateCI;
         pipelineCI.pViewportState               = &viewportStateCI;
+        pipelineCI.pRasterizationState          = &rasterizationStateCI;
+        pipelineCI.pMultisampleState            = &multisampleStateCI;
         pipelineCI.pDepthStencilState           = &depthStencilStateCI;
+        pipelineCI.pColorBlendState             = &colorBlendStateCI;
         pipelineCI.pDynamicState                = &dynamicStateCI;
         pipelineCI.stageCount                   = static_cast<uint32_t>(shaderStages.size());
-        pipelineCI.pStages                      = shaderStages.data();
+        pipelineCI.pStages                      = shaderStages.data(); // 引用之前创建的两个着色器阶段
 
         // Solid rendering pipeline
+        // 创建图形管线
+        // vkCreateGraphicsPipelines 的参数要比一般的 Vulkan 的对象创建函数的参数多一些。
+        // 它被设计成一次调用可以通过多个 VkGraphicsPipelineCreateInfo 结构体数据创建多个 VkPipeline 对象。
+        // pipelineCache 可以用来引用一个可选的 VkPipelineCache 对象。通过它可以将管线创建相关的数据进行
+        // 缓存在多个 vkCreateGraphicsPipelines 函数调用中使用，甚至可以将缓存存入文件，在多个程序间使用。
+        // 使用它可以加速之后的管线创建。
         VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.solid));
 
         // Wire frame rendering pipeline

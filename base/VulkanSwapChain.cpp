@@ -249,6 +249,8 @@ void VulkanSwapChain::create(uint32_t *width, uint32_t *height, bool vsync, bool
 	std::vector<VkPresentModeKHR> presentModes(presentModeCount); // 可用的呈现模式
 	VK_CHECK_RESULT(fpGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, presentModes.data()));
 
+	// 交换范围（交换链中的图像的分辨率）
+	// 几乎总是和我们要显示图像的窗口的分辨率相同。
 	VkExtent2D swapchainExtent = {};
 	// If width (and height) equals the special value 0xFFFFFFFF, the size of the surface will be set by the swapchain
 	if (surfCaps.currentExtent.width == (uint32_t)-1)
@@ -275,7 +277,12 @@ void VulkanSwapChain::create(uint32_t *width, uint32_t *height, bool vsync, bool
 	// 交换链变成一个先进先出的队列，每次从队列头部取出一张图像进行显示，应用程序渲染的
 	// 图像提交给交换链后，会被放在队列尾部。当队列为满时，应用程序需要进行等待。这一模式
 	// 非常类似现在常用的垂直同步。刷新显示的仕科也被叫做垂直回扫。
+	// 四种模式中只有这个模式保证一定可用，其他需要查找判断
 	VkPresentModeKHR swapchainPresentMode = VK_PRESENT_MODE_FIFO_KHR;
+
+	// 还有一个 VK_PRESENT_MODE_FIFO_RELAXED_KHR 与 VK_PRESENT_MODE_FIFO_KHR 的唯一
+	// 区是，如果应用程序延迟，导致交换链的队列在上一次垂直回扫时为空，那么如果应用程序在
+	// 下一次垂直回扫前提交图像，图像会立即被显示。这一模式可能会导致撕裂现象。
 
 	// If v-sync is not requested, try to find a mailbox mode
 	// It's the lowest latency non-tearing present mode available
@@ -283,7 +290,9 @@ void VulkanSwapChain::create(uint32_t *width, uint32_t *height, bool vsync, bool
 	{
 		for (size_t i = 0; i < presentModeCount; i++)
 		{
-			// 它
+			// 是 VK_PRESENT_MODE_FIFO_KHR 的另一个变种。它不会在交换链的队列满时阻塞
+			// 应用程序，队列中的图像会被直接替换成应用程序新提交的图像。这一模式可以用来
+			// 实现三倍缓冲，避免撕裂现象的同时减小了延迟问题。
 			if (presentModes[i] == VK_PRESENT_MODE_MAILBOX_KHR)
 			{
 				swapchainPresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
@@ -298,6 +307,8 @@ void VulkanSwapChain::create(uint32_t *width, uint32_t *height, bool vsync, bool
 	}
 
 	// Determine the number of images
+	// 确定交换链的图像数量（通常由硬件 GPU 决定）
+	// 使用交换链支持的最小图像个数 +1 数量的图像来实现三倍缓冲
 	uint32_t desiredNumberOfSwapchainImages = surfCaps.minImageCount + 1;
 #if (defined(VK_USE_PLATFORM_MACOS_MVK) && defined(VK_EXAMPLE_XCODE_GENERATED))
 	// SRS - Work around known MoltenVK issue re 2x frame rate when vsync (VK_PRESENT_MODE_FIFO_KHR) enabled
@@ -310,6 +321,7 @@ void VulkanSwapChain::create(uint32_t *width, uint32_t *height, bool vsync, bool
 		desiredNumberOfSwapchainImages = surfCaps.minImageCount;
 	}
 #endif
+	// 如果 maxImageCount 为 0 则表明，只要内存满足，我们可以使用任意数量的图像。
 	if ((surfCaps.maxImageCount > 0) && (desiredNumberOfSwapchainImages > surfCaps.maxImageCount))
 	{
 		desiredNumberOfSwapchainImages = surfCaps.maxImageCount;
@@ -345,22 +357,36 @@ void VulkanSwapChain::create(uint32_t *width, uint32_t *height, bool vsync, bool
 
 	VkSwapchainCreateInfoKHR swapchainCI = {};
 	swapchainCI.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+	// 交换链绑定表面后，还需要指定有关交换链图像的信息
 	swapchainCI.surface = surface;
 	swapchainCI.minImageCount = desiredNumberOfSwapchainImages;
 	swapchainCI.imageFormat = colorFormat; // 颜色格式
 	swapchainCI.imageColorSpace = colorSpace; // 色彩空间
 	swapchainCI.imageExtent = { swapchainExtent.width, swapchainExtent.height };
+	swapchainCI.imageArrayLayers = 1; // 用于指定每个图像所包含的层次。通常值为 1（VR 例外）
 	swapchainCI.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-	swapchainCI.preTransform = (VkSurfaceTransformFlagBitsKHR)preTransform;
-	swapchainCI.imageArrayLayers = 1;
+
+	// 指定多个队列族使用交换链图像的方式。这一设置对于图形队列和呈现队列不是同一个队列的情况
+	// 有着很大影响。我们通过图形队列在交换链图像上进行绘制操作，然后将图像提交给呈现队列来显示。
+	// 有两种控制在多个队列访问图像的方式:
+	// VK_SHARING_MODE_EXCLUSIVE: 一张图像同一时间只能被一个队列族所拥有，在另一队列族使用它之前，
+	// 							  必须显示地改变图像所有权。这一模式下性能表现最佳。
+	// VK_SHARING_MODE_CONCURRENT: 图像可以在多个队列族间使用，不需要显示地改变图像所有权。
+	// 如果图形队队列族和呈现队列族是同一个队列族（大部分情况），则不能使用协同模式
+	// 系统模式需要指定至少两个不同的队列族
 	swapchainCI.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-	swapchainCI.queueFamilyIndexCount = 0;
-	swapchainCI.presentMode = swapchainPresentMode;
-	// Setting oldSwapChain to the saved handle of the previous swapchain aids in resource reuse and makes sure that we can still present already acquired images
-	swapchainCI.oldSwapchain = oldSwapchain;
+	// 可以为交换链中的图像指定一个固定的变换操作
+	swapchainCI.preTransform = (VkSurfaceTransformFlagBitsKHR)preTransform;
+	// 用于指定 alpha 通道是否被用来和窗口系统中的其他窗口进行混合操作
+	// 通常设置为 VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR 忽略掉 alpha 通道
+	swapchainCI.compositeAlpha = compositeAlpha;
+	swapchainCI.presentMode = swapchainPresentMode; // 用于设置呈现模式
 	// Setting clipped to VK_TRUE allows the implementation to discard rendering outside of the surface area
 	swapchainCI.clipped = VK_TRUE;
-	swapchainCI.compositeAlpha = compositeAlpha;
+	// Setting oldSwapChain to the saved handle of the previous swapchain aids in resource reuse and makes sure that we can still present already acquired images
+	// 需要指定，因为在程序运行过程中交换链可能会失效
+	swapchainCI.oldSwapchain = oldSwapchain;
+	swapchainCI.queueFamilyIndexCount = 0;
 
 	// Enable transfer source on swap chain images if supported
 	if (surfCaps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) {
@@ -384,38 +410,49 @@ void VulkanSwapChain::create(uint32_t *width, uint32_t *height, bool vsync, bool
 		}
 		fpDestroySwapchainKHR(device, oldSwapchain, nullptr);
 	}
+	// 获取交换链图像的数量
 	VK_CHECK_RESULT(fpGetSwapchainImagesKHR(device, swapChain, &imageCount, NULL));
 
 	// Get the swap chain images
+	// images 是 vector<VkImage> 用于存储这些图像句柄，图像句柄用来进行渲染操作
 	images.resize(imageCount);
+	// 然后分配数组空间，获得交换链图像句柄
 	VK_CHECK_RESULT(fpGetSwapchainImagesKHR(device, swapChain, &imageCount, images.data()));
 
 	// Get the swap chain buffers containing the image and imageview
+	// 使用任何 VkImage 对象，包括处于交换链中的，处于渲染管线中的，都需要我们创建一个 VkImageView 对象来绑定访问它。
+	// 图像视图描述了访问图像的方式，以及图像的哪一部分可以被访问。
 	buffers.resize(imageCount);
 	for (uint32_t i = 0; i < imageCount; i++)
 	{
 		VkImageViewCreateInfo colorAttachmentView = {};
 		colorAttachmentView.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
 		colorAttachmentView.pNext = NULL;
+		colorAttachmentView.flags = 0;
+		// ViewType 和 format 成员变量用于指定图像数据的解释方式。ViewType 成员变量
+		// 用于指定图像被看作是一维纹理、二维纹理、三维纹理还是立方体贴图。
+		colorAttachmentView.viewType = VK_IMAGE_VIEW_TYPE_2D;
 		colorAttachmentView.format = colorFormat;
+		// components 成员变量用于进行图像颜色通道的映射。比如，对于单色纹理，我们可以将所有
+		// 颜色通道映射到红色通道。我们也可以直接将颜色通道的值映射为常数 0 或 1。
 		colorAttachmentView.components = {
 			VK_COMPONENT_SWIZZLE_R,
 			VK_COMPONENT_SWIZZLE_G,
 			VK_COMPONENT_SWIZZLE_B,
 			VK_COMPONENT_SWIZZLE_A
 		};
+		// subresourceRange 成员变量用于指定图像的用途和图像的哪一部分可以被访问。
+		// 在这里，我们的图像被用作渲染目标，并且没有细分级别，只存在一个图层
 		colorAttachmentView.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 		colorAttachmentView.subresourceRange.baseMipLevel = 0;
 		colorAttachmentView.subresourceRange.levelCount = 1;
 		colorAttachmentView.subresourceRange.baseArrayLayer = 0;
 		colorAttachmentView.subresourceRange.layerCount = 1;
-		colorAttachmentView.viewType = VK_IMAGE_VIEW_TYPE_2D;
-		colorAttachmentView.flags = 0;
 
 		buffers[i].image = images[i];
-
 		colorAttachmentView.image = buffers[i].image;
 
+		// 调用 vkCreateImageView 创建图像视图
 		VK_CHECK_RESULT(vkCreateImageView(device, &colorAttachmentView, nullptr, &buffers[i].view));
 	}
 }
@@ -434,6 +471,8 @@ VkResult VulkanSwapChain::acquireNextImage(VkSemaphore presentCompleteSemaphore,
 {
 	// By setting timeout to UINT64_MAX we will always wait until the next image has been acquired or an actual error is thrown
 	// With that we don't have to handle VK_NOT_READY
+	// 第一个参数是使用的逻辑设备对象，第二个参数是我们要获取图像的交换链，第三个参数是图像获取的超时时间
+	// 最后一个参数用于输出可用的交换链图像的索引
 	return fpAcquireNextImageKHR(device, swapChain, UINT64_MAX, presentCompleteSemaphore, (VkFence)nullptr, imageIndex);
 }
 
@@ -448,6 +487,7 @@ VkResult VulkanSwapChain::acquireNextImage(VkSemaphore presentCompleteSemaphore,
 */
 VkResult VulkanSwapChain::queuePresent(VkQueue queue, uint32_t imageIndex, VkSemaphore waitSemaphore)
 {
+	// 来配置呈现信号
 	VkPresentInfoKHR presentInfo = {};
 	presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
 	presentInfo.pNext = NULL;
@@ -457,6 +497,7 @@ VkResult VulkanSwapChain::queuePresent(VkQueue queue, uint32_t imageIndex, VkSem
 	// Check if a wait semaphore has been specified to wait for before presenting the image
 	if (waitSemaphore != VK_NULL_HANDLE)
 	{
+		// 用于指定开始呈现操作需要等待的信号量。
 		presentInfo.pWaitSemaphores = &waitSemaphore;
 		presentInfo.waitSemaphoreCount = 1;
 	}

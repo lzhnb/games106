@@ -425,9 +425,9 @@ namespace vks
 		{
 			VkPipelineRasterizationStateCreateInfo pipelineRasterizationStateCreateInfo {};
 			pipelineRasterizationStateCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-			pipelineRasterizationStateCreateInfo.polygonMode = polygonMode;
-			pipelineRasterizationStateCreateInfo.cullMode = cullMode;
-			pipelineRasterizationStateCreateInfo.frontFace = frontFace;
+			pipelineRasterizationStateCreateInfo.polygonMode = polygonMode; // 用于指定几何图元生成片段的方式。
+			pipelineRasterizationStateCreateInfo.cullMode = cullMode; // 用于指定使用的表面剔除类型。
+			pipelineRasterizationStateCreateInfo.frontFace = frontFace; // 用于指定顺时针的顶点序是正面，还是逆时针的顶点序是正面。
 			pipelineRasterizationStateCreateInfo.flags = flags;
 			pipelineRasterizationStateCreateInfo.depthClampEnable = VK_FALSE;
 			pipelineRasterizationStateCreateInfo.lineWidth = 1.0f;
@@ -533,9 +533,11 @@ namespace vks
 		{
 			VkGraphicsPipelineCreateInfo pipelineCreateInfo {};
 			pipelineCreateInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-			pipelineCreateInfo.layout = layout;
-			pipelineCreateInfo.renderPass = renderPass;
+			pipelineCreateInfo.layout = layout; // 引用之前设置的固定功能阶段信息
+			pipelineCreateInfo.renderPass = renderPass; // 指定之前创建的管线布局
 			pipelineCreateInfo.flags = flags;
+			// 用于以一个创建好的图形管线为基础创建一个新的图形管线。当要创建一个和已有管线大量设置相同的管线时，
+			// 使用它的代价要比直接创建小，并且，对于从同一个管线衍生出的两个管线，在它们之间进行管线切换操作的效率也要高很多。
 			pipelineCreateInfo.basePipelineIndex = -1;
 			pipelineCreateInfo.basePipelineHandle = VK_NULL_HANDLE;
 			return pipelineCreateInfo;

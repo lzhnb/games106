@@ -151,10 +151,12 @@ VkResult VulkanExampleBase::createInstance(bool enableValidation)
 void VulkanExampleBase::renderFrame()
 {
 	VulkanExampleBase::prepareFrame();
+	// 创建指令缓存提交信息
 	submitInfo.commandBufferCount = 1;
 	submitInfo.pCommandBuffers = &drawCmdBuffers[currentBuffer];
+	// 提交交指令缓冲给图形指令队列
 	VK_CHECK_RESULT(vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE));
-	VulkanExampleBase::submitFrame();
+	VulkanExampleBase::submitFrame(); // 呈现
 }
 
 std::string VulkanExampleBase::getWindowTitle()
@@ -171,6 +173,7 @@ std::string VulkanExampleBase::getWindowTitle()
 void VulkanExampleBase::createCommandBuffers()
 {
 	// Create one command buffer for each swap chain image and reuse for rendering
+	// 指定分配使用的指令池和需要分配地指令缓冲对象个数
 	drawCmdBuffers.resize(swapChain.imageCount);
 
 	VkCommandBufferAllocateInfo cmdBufAllocateInfo =
@@ -231,16 +234,20 @@ void VulkanExampleBase::prepare()
 	}
 }
 
+// 载入二进制文件的辅助函数
 VkPipelineShaderStageCreateInfo VulkanExampleBase::loadShader(std::string fileName, VkShaderStageFlagBits stage)
 {
+	// 填写着色器的结构体信息
 	VkPipelineShaderStageCreateInfo shaderStage = {};
 	shaderStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-	shaderStage.stage = stage;
+	shaderStage.stage = stage; // 指定着色器在管线的哪一阶段被使用
+	// module 成员变量用于指定阶段使用的着色器模块对象
 #if defined(VK_USE_PLATFORM_ANDROID_KHR)
 	shaderStage.module = vks::tools::loadShader(androidApp->activity->assetManager, fileName.c_str(), device);
 #else
 	shaderStage.module = vks::tools::loadShader(fileName.c_str(), device);
 #endif
+	// 用于指定阶段调用的着色器函数。我们可以通过使用不同 pName 在同一份着色器代码中实现所有需要的着色器
 	shaderStage.pName = "main";
 	assert(shaderStage.module != VK_NULL_HANDLE);
 	shaderModules.push_back(shaderStage.module);
@@ -735,6 +742,7 @@ void VulkanExampleBase::drawUI(const VkCommandBuffer commandBuffer)
 void VulkanExampleBase::prepareFrame()
 {
 	// Acquire the next image from the swap chain
+	// 本质上是通过调用 vkAcquireNextImageKHR 实现从交换链获取一张图像
 	VkResult result = swapChain.acquireNextImage(semaphores.presentComplete, &currentBuffer);
 	// Recreate the swapchain if it's no longer compatible with the surface (OUT_OF_DATE)
 	// SRS - If no longer optimal (VK_SUBOPTIMAL_KHR), wait until submitFrame() in case number of swapchain images will change on resize
@@ -751,6 +759,7 @@ void VulkanExampleBase::prepareFrame()
 
 void VulkanExampleBase::submitFrame()
 {
+	// 渲染执行后,需要将渲染的图像返回给交换链进行呈现操作。
 	VkResult result = swapChain.queuePresent(queue, currentBuffer, semaphores.renderComplete);
 	// Recreate the swapchain if it's no longer compatible with the surface (OUT_OF_DATE) or no longer optimal for presentation (SUBOPTIMAL)
 	if ((result == VK_ERROR_OUT_OF_DATE_KHR) || (result == VK_SUBOPTIMAL_KHR)) {
@@ -762,6 +771,7 @@ void VulkanExampleBase::submitFrame()
 	else {
 		VK_CHECK_RESULT(result);
 	}
+	// 等待上一次提交的指令结束执行
 	VK_CHECK_RESULT(vkQueueWaitIdle(queue));
 }
 
@@ -1070,6 +1080,8 @@ bool VulkanExampleBase::initVulkan()
 	VkSemaphoreCreateInfo semaphoreCreateInfo = vks::initializers::semaphoreCreateInfo();
 	// Create a semaphore used to synchronize image presentation
 	// Ensures that the image is displayed before we start submitting new commands to the queue
+	// 创建信号量-semaphore 
+	// 我们需要两个信号量，一个信号量发出图像已经被获取，可以开始渲染的信号；一个信号量发出渲染已经结果，可以开始呈现的信号。
 	VK_CHECK_RESULT(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &semaphores.presentComplete));
 	// Create a semaphore used to synchronize command submission
 	// Ensures that the image is not presented until all commands have been submitted and executed
@@ -2685,7 +2697,9 @@ void VulkanExampleBase::createSynchronizationPrimitives()
 
 void VulkanExampleBase::createCommandPool()
 {
+	// 在创建指令缓冲对象之前，先创建指令池对象
 	VkCommandPoolCreateInfo cmdPoolInfo = {};
+	// 指令池对象的创建只需要填写两个参数：sType 和 queueFamilyIndex
 	cmdPoolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
 	cmdPoolInfo.queueFamilyIndex = swapChain.queueNodeIndex;
 	cmdPoolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -2744,13 +2758,14 @@ void VulkanExampleBase::setupFrameBuffer()
 	frameBufferCreateInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
 	frameBufferCreateInfo.pNext = NULL;
 	frameBufferCreateInfo.renderPass = renderPass;
-	frameBufferCreateInfo.attachmentCount = 2;
-	frameBufferCreateInfo.pAttachments = attachments;
+	frameBufferCreateInfo.attachmentCount = 2; // 指定附着个数
+	frameBufferCreateInfo.pAttachments = attachments; // 渲染流程对象用于描述附着信息的数组
 	frameBufferCreateInfo.width = width;
 	frameBufferCreateInfo.height = height;
 	frameBufferCreateInfo.layers = 1;
 
 	// Create frame buffers for every swap chain image
+	// 为交换链的每一个图像视图对象创建对应的帧缓冲
 	frameBuffers.resize(swapChain.imageCount);
 	for (uint32_t i = 0; i < frameBuffers.size(); i++)
 	{
@@ -2761,16 +2776,17 @@ void VulkanExampleBase::setupFrameBuffer()
 
 void VulkanExampleBase::setupRenderPass()
 {
+	// 设置用于渲染的帧缓冲附着。我们需要指定使用的颜色和深度缓冲，以及采样数，渲染操作如何处理缓冲的内容。
 	std::array<VkAttachmentDescription, 2> attachments = {};
 	// Color attachment
-	attachments[0].format = swapChain.colorFormat;
-	attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
-	attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-	attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-	attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-	attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-	attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-	attachments[0].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+	attachments[0].format = swapChain.colorFormat; // 用于指定颜色缓冲附着的格式
+	attachments[0].samples = VK_SAMPLE_COUNT_1_BIT; // 用于指定采样数
+	attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; //用于指定在渲染之前对附着中的数据进行的操作
+	attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE; //用于指定在渲染之后对附着中的数据进行的操作
+	attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; // 会对模板缓冲起效
+	attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE; // 会对模板缓冲起效
+	attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED; // 用于指定渲染流程开始前的图像布局方式
+	attachments[0].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR; // 用于指定渲染流程结束后的图像布局方式
 	// Depth attachment
 	attachments[1].format = depthFormat;
 	attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
@@ -2781,8 +2797,9 @@ void VulkanExampleBase::setupRenderPass()
 	attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 	attachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
+	// 子流程和附着引用
 	VkAttachmentReference colorReference = {};
-	colorReference.attachment = 0;
+	colorReference.attachment = 0; // 用于指定要引用的附着在附着描述结构体数组中的索引
 	colorReference.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
 	VkAttachmentReference depthReference = {};
@@ -2801,8 +2818,10 @@ void VulkanExampleBase::setupRenderPass()
 	subpassDescription.pResolveAttachments = nullptr;
 
 	// Subpass dependencies for layout transitions
+	// 配置子流程依赖结构体
 	std::array<VkSubpassDependency, 2> dependencies;
 
+	// srcSubpass 和 dstSubpass 成员变量用于指定被依赖的子流程的索引和依赖被依赖的子流程的索引。
 	dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
 	dependencies[0].dstSubpass = 0;
 	dependencies[0].srcStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
@@ -2819,6 +2838,7 @@ void VulkanExampleBase::setupRenderPass()
 	dependencies[1].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
 	dependencies[1].dependencyFlags = 0;
 
+	// 定义渲染流程结构体和创建渲染流程对象
 	VkRenderPassCreateInfo renderPassInfo = {};
 	renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
 	renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
@@ -2827,7 +2847,6 @@ void VulkanExampleBase::setupRenderPass()
 	renderPassInfo.pSubpasses = &subpassDescription;
 	renderPassInfo.dependencyCount = static_cast<uint32_t>(dependencies.size());
 	renderPassInfo.pDependencies = dependencies.data();
-
 	VK_CHECK_RESULT(vkCreateRenderPass(device, &renderPassInfo, nullptr, &renderPass));
 }
 

@@ -33,6 +33,7 @@ namespace vks
 		// Features should be checked by the examples before using them
 		vkGetPhysicalDeviceFeatures(physicalDevice, &features);
 		// Memory properties are used regularly for creating all kinds of buffers
+		// 查询物理设备可用的内存类型
 		vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
 		// Queue family properties, used for setting up requested queues upon device creation
 		uint32_t queueFamilyCount;
@@ -340,9 +341,19 @@ namespace vks
 		VK_CHECK_RESULT(vkCreateBuffer(logicalDevice, &bufferCreateInfo, nullptr, buffer));
 
 		// Create the memory backing up the buffer handle
+		// 缓冲创建后实际还没有给它分配任何内存。分配缓冲内存前，
+		// 我们需要调用 vkGetBufferMemoryRequirements 函数获取缓冲的内存需求。
 		VkMemoryRequirements memReqs;
-		VkMemoryAllocateInfo memAlloc = vks::initializers::memoryAllocateInfo();
 		vkGetBufferMemoryRequirements(logicalDevice, *buffer, &memReqs);
+		// vkGetBufferMemoryRequirements 函数返回的 VkMemoryRequirements 结构体有下面这三个成员变量：
+		// size ：缓冲需要的内存的字节大小，它可能和 bufferInfo.size 的值不同。
+		// alignment：缓冲在实际被分配的内存中的开始位置。它的值依赖于 bufferInfo.usage 和 bufferInfo.flag
+		// memoryTypeBIts：指示适合该缓冲使用的内存类型的位域。
+		// 显卡可以分配不同类型的内存作为缓冲使用。不同类型的内存所允许进行的操作以及操作的效率有所不同。
+		// 我们需要结合自己的需求选择最合适的内存类型使用。
+
+		// 定义结构体来分配需要的内存
+		VkMemoryAllocateInfo memAlloc = vks::initializers::memoryAllocateInfo();
 		memAlloc.allocationSize = memReqs.size;
 		// Find a memory type index that fits the properties of the buffer
 		memAlloc.memoryTypeIndex = getMemoryType(memReqs.memoryTypeBits, memoryPropertyFlags);
@@ -353,12 +364,14 @@ namespace vks
 			allocFlagsInfo.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT_KHR;
 			memAlloc.pNext = &allocFlagsInfo;
 		}
+		// 进行内存分配
 		VK_CHECK_RESULT(vkAllocateMemory(logicalDevice, &memAlloc, nullptr, memory));
 			
 		// If a pointer to the buffer data has been passed, map the buffer and copy over the data
 		if (data != nullptr)
 		{
 			void *mapped;
+			// 将缓冲关联的内存映射到 CPU 可以访问的内存
 			VK_CHECK_RESULT(vkMapMemory(logicalDevice, *memory, 0, size, 0, &mapped));
 			memcpy(mapped, data, size);
 			// If host coherency hasn't been requested, do a manual flush to make writes visible
@@ -374,6 +387,7 @@ namespace vks
 		}
 
 		// Attach the memory to the buffer object
+		// 内存分配成功后，使用 vkBindBufferMemory 将分配的内存和缓冲对象进行关联
 		VK_CHECK_RESULT(vkBindBufferMemory(logicalDevice, *buffer, *memory, 0));
 
 		return VK_SUCCESS;
