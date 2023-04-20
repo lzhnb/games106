@@ -13,6 +13,12 @@ layout (location = 5) in vec3 inTangent;
 
 layout (location = 0) out vec4 outFragColor;
 
+layout(push_constant) uniform PushConsts {
+	vec4 baseColorFactor;
+	float metallicFactor;
+	float roughnessFactor;
+} factors;
+
 const float PI = 3.14159265359;
 
 // Normal Distribution function --------------------------------------
@@ -94,6 +100,11 @@ void main()
 
 	vec3 L = normalize(inLightVec);
 	vec3 V = normalize(inViewVec);
+
+	// factors
+	// albedo *= factors.baseColorFactor.rgb;
+	metallic *= factors.metallicFactor;
+	roughness *= factors.roughnessFactor;
 
 	// Specular contribution
 	vec3 Lo = BRDF(L, V, normal, albedo, metallic, roughness);

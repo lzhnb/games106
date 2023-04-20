@@ -106,6 +106,8 @@ public:
         uint32_t  normalTextureIndex;
         uint32_t  occlusionTextureIndex;
         uint32_t  metallicRoughnessTextureIndex;
+        float     metallicFactor  = 1.0f;
+        float     roughnessFactor = 1.0f;
     };
 
     // Contains the texture for a single glTF image
@@ -122,6 +124,23 @@ public:
     struct Texture
     {
         int32_t imageIndex;
+    };
+
+    // Push constant
+    struct Factors
+    {
+        struct PushBlock
+        {
+            glm::vec4 baseColorFactor;
+            float     metallicFactor;
+            float     roughnessFactor;
+        } params;
+        Factors(glm::vec4 baseColorFactor, float metallicFactor, float roughnessFactor)
+        {
+            params.baseColorFactor = baseColorFactor;
+            params.metallicFactor  = metallicFactor;
+            params.roughnessFactor = roughnessFactor;
+        }
     };
 
     /*
@@ -246,6 +265,14 @@ public:
             if (glTFMaterial.occlusionTexture.index)
             {
                 materials[i].occlusionTextureIndex = glTFMaterial.occlusionTexture.index;
+            }
+            if (glTFMaterial.values.find("roughnessFactor") != glTFMaterial.values.end())
+            {
+                materials[i].roughnessFactor = static_cast<float>(glTFMaterial.values["roughnessFactor"].Factor());
+            }
+            if (glTFMaterial.values.find("metallicFactor") != glTFMaterial.values.end())
+            {
+                materials[i].metallicFactor = static_cast<float>(glTFMaterial.values["metallicFactor"].Factor());
             }
         }
     }
@@ -444,13 +471,22 @@ public:
                 currentParent = currentParent->parent;
             }
             // Pass the final matrix to the vertex shader using push constants
-            // TODO: support baseColorFactor/metallicFactor/roughnessFactor
             vkCmdPushConstants(
                 commandBuffer, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &nodeMatrix);
             for (VulkanglTFModel::Primitive& primitive : node->mesh.primitives)
             {
                 if (primitive.indexCount > 0)
                 {
+                    // NOTE: support baseColorFactor/metallicFactor/roughnessFactor
+                    Factors factors(materials[primitive.materialIndex].baseColorFactor,
+                                    materials[primitive.materialIndex].metallicFactor,
+                                    materials[primitive.materialIndex].roughnessFactor);
+                    vkCmdPushConstants(commandBuffer,
+                                       pipelineLayout,
+                                       VK_SHADER_STAGE_FRAGMENT_BIT,
+                                       sizeof(glm::mat4), // NOTE: offset 来保证不修改之前的值
+                                       sizeof(Factors::PushBlock),
+                                       &factors);
                     // Get the texture index for this primitive
                     VulkanglTFModel::Texture texture =
                         textures[materials[primitive.materialIndex].baseColorTextureIndex];
