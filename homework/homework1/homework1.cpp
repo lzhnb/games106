@@ -828,19 +828,11 @@ public:
         // 属性描述：传递给顶点着色器的属性类型，用于将属性绑定到顶点着色器中的变量
         // 这里的索引和 shader.vert 中的 layout(location = x) 要对应
         const std::vector<VkVertexInputAttributeDescription> vertexInputAttributes = {
-            vks::initializers::vertexInputAttributeDescription(
-                0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(VulkanglTFModel::Vertex, pos)),    // Location 0: Position
-            vks::initializers::vertexInputAttributeDescription(
-                0, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(VulkanglTFModel::Vertex, normal)), // Location 1: Normal
-            vks::initializers::vertexInputAttributeDescription(
-                0,
-                2,
-                VK_FORMAT_R32G32B32_SFLOAT,
-                offsetof(VulkanglTFModel::Vertex, uv)), // Location 2: Texture coordinates
-            vks::initializers::vertexInputAttributeDescription(
-                0, 3, VK_FORMAT_R32G32B32_SFLOAT, offsetof(VulkanglTFModel::Vertex, color)), // Location 3: Color
-            vks::initializers::vertexInputAttributeDescription(
-                0, 4, VK_FORMAT_R32G32B32_SFLOAT, offsetof(VulkanglTFModel::Vertex, tangent)), // Location 3: Color
+            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(VulkanglTFModel::Vertex, pos)}, // Location 0: Position
+            {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(VulkanglTFModel::Vertex, normal)}, // Location 1: Normal
+            {2, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(VulkanglTFModel::Vertex, uv)}, // Location 2: Texture coordinates
+            {3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(VulkanglTFModel::Vertex, color)}, // Location 3: Color
+            {4, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(VulkanglTFModel::Vertex, tangent)}, // Location 4: Tangent
         };
         VkPipelineVertexInputStateCreateInfo vertexInputStateCI =
             vks::initializers::pipelineVertexInputStateCreateInfo();
