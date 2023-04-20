@@ -440,6 +440,7 @@ public:
                     VulkanglTFModel::Texture texture =
                         textures[materials[primitive.materialIndex].baseColorTextureIndex];
                     // Bind the descriptor for the current primitive's texture
+                    // 对应 mesh.frag 中的 layout (set = 1, binding = 0)
                     vkCmdBindDescriptorSets(commandBuffer,
                                             VK_PIPELINE_BIND_POINT_GRAPHICS,
                                             pipelineLayout,
@@ -482,17 +483,18 @@ public:
 
     VulkanglTFModel glTFModel;
 
-    struct ShaderData
+    // 定义 uniform 缓冲对象 (UBO)
+    struct UniformBufferObjectBuffer
     {
         vks::Buffer buffer;
-        struct Values
+        struct UniformBufferObject
         {
             glm::mat4 projection;
             glm::mat4 model;
             glm::vec4 lightPos = glm::vec4(5.0f, 5.0f, -5.0f, 1.0f);
             glm::vec4 viewPos;
-        } values;
-    } shaderData;
+        } ubo;
+    } uboBuffer;
 
     struct Pipelines
     {
@@ -533,7 +535,7 @@ public:
         vkDestroyDescriptorSetLayout(device, descriptorSetLayouts.matrices, nullptr);
         vkDestroyDescriptorSetLayout(device, descriptorSetLayouts.textures, nullptr);
 
-        shaderData.buffer.destroy();
+        uboBuffer.buffer.destroy();
     }
 
     virtual void getEnabledFeatures()
@@ -587,9 +589,11 @@ public:
             vkCmdSetViewport(drawCmdBuffers[i], 0, 1, &viewport);
             vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
             // Bind scene matrices descriptor to set 0
+            // 为每个交换链图像绑定对应的描述符集
+            // 对应 mesh.vert 中的 layout (set = 0, binding = 0)
             vkCmdBindDescriptorSets(
                 drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
-            // 绑定图形管线，第二个参数用于指定管线对象是图形管线还是计算管线。
+            // 绑定图形管线，第二个参数用于指定管线对象是图形管线还是计算管线
             vkCmdBindPipeline(
                 drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, wireframe ? pipelines.wireframe : pipelines.solid);
             glTFModel.draw(drawCmdBuffers[i], pipelineLayout);
@@ -658,8 +662,8 @@ public:
         } vertexStaging, indexStaging;
 
         // Create host visible staging buffers (source)
+        // 创建顶点缓冲 - 对应多边形网格的顶点
         VK_CHECK_RESULT(
-            // 创建顶点缓冲 - 对应多边形网格的顶点
             vulkanDevice->createBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                                        vertexBufferSize,
@@ -667,8 +671,8 @@ public:
                                        &vertexStaging.memory,
                                        vertexBuffer.data()));
         // Index data
+        // 创建索引缓冲 - 对应多边形网格的三角面片
         VK_CHECK_RESULT(
-            // 创建索引缓冲 - 对应多边形网格的三角面片
             vulkanDevice->createBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                                        indexBufferSize,
@@ -716,6 +720,7 @@ public:
             This sample uses separate descriptor sets (and layouts) for the matrices and materials (textures)
         */
 
+        // 定义结构体来对描述符池可以分配的描述符集进行定义
         std::vector<VkDescriptorPoolSize> poolSizes = {
             vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1),
             // One combined image sampler per model image/texture
@@ -723,12 +728,17 @@ public:
                                                   static_cast<uint32_t>(glTFModel.images.size())),
         };
         // One set for matrices and one per model image/texture
+        // 描述符池的大小需要通过 VkDescriptorPoolCreateInfo 结构体定义
         const uint32_t             maxSetCount = static_cast<uint32_t>(glTFModel.images.size()) + 1;
         VkDescriptorPoolCreateInfo descriptorPoolInfo =
             vks::initializers::descriptorPoolCreateInfo(poolSizes, maxSetCount);
         VK_CHECK_RESULT(vkCreateDescriptorPool(device, &descriptorPoolInfo, nullptr, &descriptorPool));
 
         // Descriptor set layout for passing matrices
+        // 定义结构体和创建描述符
+        // binding 和 descriptorType 用于指定着色器使用的描述符绑定和描述符类型。
+        // stageFlags 用来指定在哪一个着色器阶段被使用（可组合）
+        // descriptorCount 用来指定数组中元素的个数。如果 MVP 矩阵只需要一个 uniform 缓冲对象，则设为 1
         VkDescriptorSetLayoutBinding setLayoutBinding = vks::initializers::descriptorSetLayoutBinding(
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 0);
         VkDescriptorSetLayoutCreateInfo descriptorSetLayoutCI =
@@ -756,11 +766,12 @@ public:
         VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCI, nullptr, &pipelineLayout));
 
         // Descriptor set for scene matrices
+        // 纸钉分配描述符对象的描述符池，需要分配的描述符集数量
         VkDescriptorSetAllocateInfo allocInfo =
             vks::initializers::descriptorSetAllocateInfo(descriptorPool, &descriptorSetLayouts.matrices, 1);
         VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet));
         VkWriteDescriptorSet writeDescriptorSet = vks::initializers::writeDescriptorSet(
-            descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &shaderData.buffer.descriptor);
+            descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &uboBuffer.buffer.descriptor);
         vkUpdateDescriptorSets(device, 1, &writeDescriptorSet, 0, nullptr);
         // Descriptor sets for materials
         for (auto& image : glTFModel.images)
@@ -875,24 +886,25 @@ public:
     void prepareUniformBuffers()
     {
         // Vertex shader uniform buffer block
+        // 分配 uniform 缓冲对象
         VK_CHECK_RESULT(
             vulkanDevice->createBuffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                       &shaderData.buffer,
-                                       sizeof(shaderData.values)));
+                                       &uboBuffer.buffer,
+                                       sizeof(uboBuffer.ubo)));
 
         // Map persistent
-        VK_CHECK_RESULT(shaderData.buffer.map());
+        VK_CHECK_RESULT(uboBuffer.buffer.map());
 
         updateUniformBuffers();
     }
 
     void updateUniformBuffers()
     {
-        shaderData.values.projection = camera.matrices.perspective;
-        shaderData.values.model      = camera.matrices.view;
-        shaderData.values.viewPos    = camera.viewPos;
-        memcpy(shaderData.buffer.mapped, &shaderData.values, sizeof(shaderData.values));
+        uboBuffer.ubo.projection = camera.matrices.perspective;
+        uboBuffer.ubo.model      = camera.matrices.view;
+        uboBuffer.ubo.viewPos    = camera.viewPos;
+        memcpy(uboBuffer.buffer.mapped, &uboBuffer.ubo, sizeof(uboBuffer.ubo));
     }
 
     void prepare()
