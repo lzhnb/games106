@@ -444,6 +444,7 @@ public:
                 currentParent = currentParent->parent;
             }
             // Pass the final matrix to the vertex shader using push constants
+            // TODO: support baseColorFactor/metallicFactor/roughnessFactor
             vkCmdPushConstants(
                 commandBuffer, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &nodeMatrix);
             for (VulkanglTFModel::Primitive& primitive : node->mesh.primitives)
@@ -471,6 +472,17 @@ public:
                                             2,
                                             1,
                                             &images[normal.imageIndex].descriptorSet,
+                                            0,
+                                            nullptr);
+                    // Get the BRDF index for this primitive
+                    VulkanglTFModel::Texture BRDF =
+                        textures[materials[primitive.materialIndex].metallicRoughnessTextureIndex];
+                    vkCmdBindDescriptorSets(commandBuffer,
+                                            VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                            pipelineLayout,
+                                            3,
+                                            1,
+                                            &images[BRDF.imageIndex].descriptorSet,
                                             0,
                                             nullptr);
                     // NOTE: 绘制
@@ -534,6 +546,7 @@ public:
         VkDescriptorSetLayout matrices;
         VkDescriptorSetLayout textures;
         VkDescriptorSetLayout normals;
+        VkDescriptorSetLayout BRDFs;
     } descriptorSetLayouts;
 
     VulkanExample() : VulkanExampleBase(ENABLE_VALIDATION)
@@ -560,6 +573,7 @@ public:
         vkDestroyDescriptorSetLayout(device, descriptorSetLayouts.matrices, nullptr);
         vkDestroyDescriptorSetLayout(device, descriptorSetLayouts.textures, nullptr);
         vkDestroyDescriptorSetLayout(device, descriptorSetLayouts.normals, nullptr);
+        vkDestroyDescriptorSetLayout(device, descriptorSetLayouts.BRDFs, nullptr);
 
         uboBuffer.buffer.destroy();
     }
@@ -781,12 +795,18 @@ public:
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0);
         VK_CHECK_RESULT(
             vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCI, nullptr, &descriptorSetLayouts.normals));
+        setLayoutBinding = vks::initializers::descriptorSetLayoutBinding(
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0);
+        VK_CHECK_RESULT(
+            vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCI, nullptr, &descriptorSetLayouts.BRDFs));
 
         // Pipeline layout using both descriptor sets (set 0 = matrices, set 1 = material)
         // 管线布局
-        std::array<VkDescriptorSetLayout, 3> setLayouts = {
-            descriptorSetLayouts.matrices, descriptorSetLayouts.textures, descriptorSetLayouts.normals};
-        VkPipelineLayoutCreateInfo pipelineLayoutCI =
+        std::array<VkDescriptorSetLayout, 4> setLayouts = {descriptorSetLayouts.matrices,
+                                                           descriptorSetLayouts.textures,
+                                                           descriptorSetLayouts.normals,
+                                                           descriptorSetLayouts.BRDFs};
+        VkPipelineLayoutCreateInfo           pipelineLayoutCI =
             vks::initializers::pipelineLayoutCreateInfo(setLayouts.data(), static_cast<uint32_t>(setLayouts.size()));
         // We will use push constants to push the local matrices of a primitive to the vertex shader
         VkPushConstantRange pushConstantRange =
@@ -797,13 +817,14 @@ public:
         VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCI, nullptr, &pipelineLayout));
 
         // Descriptor set for scene matrices
-        // 纸钉分配描述符对象的描述符池，需要分配的描述符集数量
+        // 制定分配描述符对象的描述符池，需要分配的描述符集数量
         VkDescriptorSetAllocateInfo allocInfo =
             vks::initializers::descriptorSetAllocateInfo(descriptorPool, &descriptorSetLayouts.matrices, 1);
         VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet));
         VkWriteDescriptorSet writeDescriptorSet = vks::initializers::writeDescriptorSet(
             descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &uboBuffer.buffer.descriptor);
         vkUpdateDescriptorSets(device, 1, &writeDescriptorSet, 0, nullptr);
+
         // Descriptor sets for materials
         for (auto& image : glTFModel.images)
         {
@@ -828,10 +849,13 @@ public:
         // 属性描述：传递给顶点着色器的属性类型，用于将属性绑定到顶点着色器中的变量
         // 这里的索引和 shader.vert 中的 layout(location = x) 要对应
         const std::vector<VkVertexInputAttributeDescription> vertexInputAttributes = {
-            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(VulkanglTFModel::Vertex, pos)}, // Location 0: Position
+            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(VulkanglTFModel::Vertex, pos)},    // Location 0: Position
             {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(VulkanglTFModel::Vertex, normal)}, // Location 1: Normal
-            {2, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(VulkanglTFModel::Vertex, uv)}, // Location 2: Texture coordinates
-            {3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(VulkanglTFModel::Vertex, color)}, // Location 3: Color
+            {2,
+             0,
+             VK_FORMAT_R32G32B32_SFLOAT,
+             offsetof(VulkanglTFModel::Vertex, uv)}, // Location 2: Texture coordinates
+            {3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(VulkanglTFModel::Vertex, color)},   // Location 3: Color
             {4, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(VulkanglTFModel::Vertex, tangent)}, // Location 4: Tangent
         };
         VkPipelineVertexInputStateCreateInfo vertexInputStateCI =
