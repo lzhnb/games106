@@ -2710,13 +2710,13 @@ void VulkanExampleBase::setupDepthStencil()
 {
 	VkImageCreateInfo imageCI{};
 	imageCI.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-	imageCI.imageType = VK_IMAGE_TYPE_2D;
+	imageCI.imageType = VK_IMAGE_TYPE_2D; // 用于指定图像类型
 	imageCI.format = depthFormat;
-	imageCI.extent = { width, height, 1 };
-	imageCI.mipLevels = 1;
+	imageCI.extent = { width, height, 1 }; // 用于指定图像在每个维度的范围
+	imageCI.mipLevels = 1; // 用于确定 mipmap 层级
 	imageCI.arrayLayers = 1;
-	imageCI.samples = VK_SAMPLE_COUNT_1_BIT;
-	imageCI.tiling = VK_IMAGE_TILING_OPTIMAL;
+	imageCI.samples = VK_SAMPLE_COUNT_1_BIT; // 用于确定多层采样
+	imageCI.tiling = VK_IMAGE_TILING_OPTIMAL; // 用于指定纹素以什么形式排列
 	imageCI.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
 
 	VK_CHECK_RESULT(vkCreateImage(device, &imageCI, nullptr, &depthStencil.image));

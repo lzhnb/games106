@@ -46,6 +46,7 @@ public:
         glm::vec3 normal;
         glm::vec2 uv;
         glm::vec3 color;
+        glm::vec3 tangent;
     };
 
     // Single vertex buffer for all primitives
@@ -233,18 +234,18 @@ public:
                 materials[i].baseColorTextureIndex = glTFMaterial.values["baseColorTexture"].TextureIndex();
             }
             // NOTE: external for PBR material
-            if (glTFMaterial.values.find("normalTexture") != glTFMaterial.values.end())
-            {
-                materials[i].normalTextureIndex = glTFMaterial.values["normalTexture"].TextureIndex();
-            }
             if (glTFMaterial.values.find("metallicRoughnessTexture") != glTFMaterial.values.end())
             {
                 materials[i].metallicRoughnessTextureIndex =
                     glTFMaterial.values["metallicRoughnessTexture"].TextureIndex();
             }
-            if (glTFMaterial.values.find("occlusionTexture") != glTFMaterial.values.end())
+            if (glTFMaterial.normalTexture.index)
             {
-                materials[i].occlusionTextureIndex = glTFMaterial.values["occlusionTexture"].TextureIndex();
+                materials[i].normalTextureIndex = glTFMaterial.normalTexture.index;
+            }
+            if (glTFMaterial.occlusionTexture.index)
+            {
+                materials[i].occlusionTextureIndex = glTFMaterial.occlusionTexture.index;
             }
         }
     }
@@ -305,6 +306,7 @@ public:
                     const float* positionBuffer  = nullptr;
                     const float* normalsBuffer   = nullptr;
                     const float* texCoordsBuffer = nullptr;
+                    const float* tangentBuffer   = nullptr;
                     size_t       vertexCount     = 0;
 
                     // Get buffer data for vertex positions
@@ -326,6 +328,15 @@ public:
                         normalsBuffer                    = reinterpret_cast<const float*>(
                             &(input.buffers[view.buffer].data[accessor.byteOffset + view.byteOffset]));
                     }
+                    // NOTE: tangentBuffer
+                    if (glTFPrimitive.attributes.find("TANGENT") != glTFPrimitive.attributes.end())
+                    {
+                        const tinygltf::Accessor& accessor =
+                            input.accessors[glTFPrimitive.attributes.find("TANGENT")->second];
+                        const tinygltf::BufferView& view = input.bufferViews[accessor.bufferView];
+                        tangentBuffer                    = reinterpret_cast<const float*>(
+                            &(input.buffers[view.buffer].data[accessor.byteOffset + view.byteOffset]));
+                    }
                     // Get buffer data for vertex texture coordinates
                     // glTF supports multiple sets, we only load the first one
                     if (glTFPrimitive.attributes.find("TEXCOORD_0") != glTFPrimitive.attributes.end())
@@ -344,8 +355,11 @@ public:
                         vert.pos    = glm::vec4(glm::make_vec3(&positionBuffer[v * 3]), 1.0f);
                         vert.normal = glm::normalize(
                             glm::vec3(normalsBuffer ? glm::make_vec3(&normalsBuffer[v * 3]) : glm::vec3(0.0f)));
-                        vert.uv    = texCoordsBuffer ? glm::make_vec2(&texCoordsBuffer[v * 2]) : glm::vec3(0.0f);
-                        vert.color = glm::vec3(1.0f);
+                        // NOTE: add tangent
+                        vert.tangent = glm::normalize(glm::vec3(tangentBuffer ? glm::make_vec3(&tangentBuffer[v * 3]) :
+                                                                                glm::vec3(0.0f, 0.0f, 1.0f)));
+                        vert.uv      = texCoordsBuffer ? glm::make_vec2(&texCoordsBuffer[v * 2]) : glm::vec3(0.0f);
+                        vert.color   = glm::vec3(1.0f);
                         vertexBuffer.push_back(vert);
                     }
                 }
@@ -449,6 +463,16 @@ public:
                                             &images[texture.imageIndex].descriptorSet,
                                             0,
                                             nullptr);
+                    // Get the normal index for this primitive
+                    VulkanglTFModel::Texture normal = textures[materials[primitive.materialIndex].normalTextureIndex];
+                    vkCmdBindDescriptorSets(commandBuffer,
+                                            VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                            pipelineLayout,
+                                            2,
+                                            1,
+                                            &images[normal.imageIndex].descriptorSet,
+                                            0,
+                                            nullptr);
                     // NOTE: 绘制
                     vkCmdDrawIndexed(commandBuffer, primitive.indexCount, 1, primitive.firstIndex, 0, 0);
                 }
@@ -509,6 +533,7 @@ public:
     {
         VkDescriptorSetLayout matrices;
         VkDescriptorSetLayout textures;
+        VkDescriptorSetLayout normals;
     } descriptorSetLayouts;
 
     VulkanExample() : VulkanExampleBase(ENABLE_VALIDATION)
@@ -534,6 +559,7 @@ public:
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
         vkDestroyDescriptorSetLayout(device, descriptorSetLayouts.matrices, nullptr);
         vkDestroyDescriptorSetLayout(device, descriptorSetLayouts.textures, nullptr);
+        vkDestroyDescriptorSetLayout(device, descriptorSetLayouts.normals, nullptr);
 
         uboBuffer.buffer.destroy();
     }
@@ -628,7 +654,7 @@ public:
 
         if (fileLoaded)
         {
-            glTFModel.loadImages(glTFInput);
+            glTFModel.loadImages(glTFInput); // 加载纹理贴图
             glTFModel.loadMaterials(glTFInput);
             glTFModel.loadTextures(glTFInput);
             const tinygltf::Scene& scene = glTFInput.scenes[0];
@@ -681,6 +707,7 @@ public:
                                        indexBuffer.data()));
 
         // Create device local buffers (target)
+        // 创建 GPU 上的顶点缓冲和索引缓冲
         VK_CHECK_RESULT(vulkanDevice->createBuffer(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                                                    vertexBufferSize,
@@ -750,12 +777,16 @@ public:
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0);
         VK_CHECK_RESULT(
             vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCI, nullptr, &descriptorSetLayouts.textures));
+        setLayoutBinding = vks::initializers::descriptorSetLayoutBinding(
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0);
+        VK_CHECK_RESULT(
+            vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCI, nullptr, &descriptorSetLayouts.normals));
 
         // Pipeline layout using both descriptor sets (set 0 = matrices, set 1 = material)
         // 管线布局
-        std::array<VkDescriptorSetLayout, 2> setLayouts = {descriptorSetLayouts.matrices,
-                                                           descriptorSetLayouts.textures};
-        VkPipelineLayoutCreateInfo           pipelineLayoutCI =
+        std::array<VkDescriptorSetLayout, 3> setLayouts = {
+            descriptorSetLayouts.matrices, descriptorSetLayouts.textures, descriptorSetLayouts.normals};
+        VkPipelineLayoutCreateInfo pipelineLayoutCI =
             vks::initializers::pipelineLayoutCreateInfo(setLayouts.data(), static_cast<uint32_t>(setLayouts.size()));
         // We will use push constants to push the local matrices of a primitive to the vertex shader
         VkPushConstantRange pushConstantRange =
@@ -808,6 +839,8 @@ public:
                 offsetof(VulkanglTFModel::Vertex, uv)), // Location 2: Texture coordinates
             vks::initializers::vertexInputAttributeDescription(
                 0, 3, VK_FORMAT_R32G32B32_SFLOAT, offsetof(VulkanglTFModel::Vertex, color)), // Location 3: Color
+            vks::initializers::vertexInputAttributeDescription(
+                0, 4, VK_FORMAT_R32G32B32_SFLOAT, offsetof(VulkanglTFModel::Vertex, tangent)), // Location 3: Color
         };
         VkPipelineVertexInputStateCreateInfo vertexInputStateCI =
             vks::initializers::pipelineVertexInputStateCreateInfo();
