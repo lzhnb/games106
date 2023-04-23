@@ -27,6 +27,7 @@
 #include "tiny_gltf.h"
 
 #include "vulkanexamplebase.h"
+#include <glm/gtx/matrix_decompose.hpp>
 
 #define ENABLE_VALIDATION false
 
@@ -113,21 +114,14 @@ public:
         std::vector<glm::vec4> outputsVec4;
     };
 
-    struct AnimationChannel
-    {
-        std::string path;
-        Node*       node;
-        uint32_t    samplerIndex;
-    };
-
     struct Animation
     {
-        std::string                   name;
-        std::vector<AnimationSampler> samplers;
-        std::vector<AnimationChannel> channels;
-        float                         start       = std::numeric_limits<float>::max();
-        float                         end         = std::numeric_limits<float>::min();
-        float                         currentTime = 0.0f;
+        std::string            path;
+        std::vector<float>     key_frame_times;
+        std::vector<glm::vec4> key_frame_data;
+        uint32_t               nodeIndex;
+        float                  max_time;
+        float                  min_time;
     };
 
     // A glTF material stores information in e.g. the texture that is attached to it and colors
@@ -178,11 +172,13 @@ public:
     /*
         Model data
     */
-    std::vector<Image>     images;
-    std::vector<Texture>   textures;
-    std::vector<Material>  materials;
-    std::vector<Node*>     nodes;
-    std::vector<Animation> animations;
+    std::vector<Image>    images;
+    std::vector<Texture>  textures;
+    std::vector<Material> materials;
+    std::vector<Node*>    nodes;
+    // std::vector<Animation> animations;
+    std::map<int, std::vector<Animation>> animationsDict;
+    Node* rootNode;
 
     uint32_t activeAnimation = 0;
 
@@ -349,19 +345,17 @@ public:
     // POI: Load the animations from the glTF model
     void loadAnimations(tinygltf::Model& input)
     {
-        animations.resize(input.animations.size());
-
         for (size_t i = 0; i < input.animations.size(); i++)
         {
             tinygltf::Animation glTFAnimation = input.animations[i];
-            animations[i].name                = glTFAnimation.name;
 
             // Samplers
-            animations[i].samplers.resize(glTFAnimation.samplers.size());
+            std::vector<AnimationSampler> samplers;
+            samplers.resize(glTFAnimation.samplers.size());
             for (size_t j = 0; j < glTFAnimation.samplers.size(); j++)
             {
                 tinygltf::AnimationSampler glTFSampler = glTFAnimation.samplers[j];
-                AnimationSampler&          dstSampler  = animations[i].samplers[j];
+                AnimationSampler&          dstSampler  = samplers[j];
                 dstSampler.interpolation               = glTFSampler.interpolation;
 
                 // Read sampler keyframe input time values
@@ -374,18 +368,6 @@ public:
                     for (size_t index = 0; index < accessor.count; index++)
                     {
                         dstSampler.inputs.push_back(buf[index]);
-                    }
-                    // Adjust animation's start and end times
-                    for (auto input : animations[i].samplers[j].inputs)
-                    {
-                        if (input < animations[i].start)
-                        {
-                            animations[i].start = input;
-                        };
-                        if (input > animations[i].end)
-                        {
-                            animations[i].end = input;
-                        }
                     }
                 }
 
@@ -421,15 +403,27 @@ public:
                 }
             }
 
-            // Channels
-            animations[i].channels.resize(glTFAnimation.channels.size());
+            // build animationsDict according to the channels
             for (size_t j = 0; j < glTFAnimation.channels.size(); j++)
             {
                 tinygltf::AnimationChannel glTFChannel = glTFAnimation.channels[j];
-                AnimationChannel&          dstChannel  = animations[i].channels[j];
-                dstChannel.path                        = glTFChannel.target_path;
-                dstChannel.samplerIndex                = glTFChannel.sampler;
-                dstChannel.node                        = nodeFromIndex(glTFChannel.target_node);
+                int                        target_node = glTFChannel.target_node;
+                AnimationSampler           sampler     = samplers[glTFChannel.sampler];
+                Animation                  animation {};
+                animation.nodeIndex       = target_node;
+                animation.path            = glTFChannel.target_path;
+                animation.key_frame_data  = sampler.outputsVec4;
+                animation.key_frame_times = sampler.inputs;
+                animation.min_time        = sampler.inputs.front();
+                animation.max_time        = sampler.inputs.back();
+                if (animationsDict.count(target_node))
+                {
+                    animationsDict[target_node].push_back(animation);
+                }
+                else
+                {
+                    animationsDict[target_node] = {animation};
+                }
             }
         }
     }
@@ -450,23 +444,27 @@ public:
         // It's either made up from translation, rotation, scale or a 4x4 matrix
         if (inputNode.translation.size() == 3)
         {
-            node->matrix = glm::translate(node->matrix, glm::vec3(glm::make_vec3(inputNode.translation.data())));
+            node->matrix      = glm::translate(node->matrix, glm::vec3(glm::make_vec3(inputNode.translation.data())));
             node->translation = glm::make_vec3(inputNode.translation.data());
         }
         if (inputNode.rotation.size() == 4)
         {
             glm::quat q = glm::make_quat(inputNode.rotation.data());
             node->matrix *= glm::mat4(q);
-            node->rotation = glm::mat4(q);
+            node->rotation = q;
         }
         if (inputNode.scale.size() == 3)
         {
             node->matrix = glm::scale(node->matrix, glm::vec3(glm::make_vec3(inputNode.scale.data())));
-            node->scale = glm::make_vec3(inputNode.scale.data());
+            node->scale  = glm::make_vec3(inputNode.scale.data());
         }
         if (inputNode.matrix.size() == 16)
         {
             node->matrix = glm::make_mat4x4(inputNode.matrix.data());
+            // decompse transformation to translation/rotation/scaleglm::vec3 scale;
+            glm::vec3 skew;
+            glm::vec4 perspective;
+            glm::decompose(node->matrix, node->scale, node->rotation, node->translation, skew, perspective);
         };
 
         // Load node's children
@@ -618,6 +616,63 @@ public:
     /*
         glTF rendering functions
     */
+    // hellper function
+    int findFrameIndex(const std::vector<float> key_frame_times, const float time)
+    {
+        int res = 0;
+        while (time > key_frame_times[res])
+            ++res;
+        return res;
+    }
+
+    glm::mat4 animatedMatrix(VulkanglTFModel::Node* node, float time)
+    {
+        glm::mat4 res = glm::mat4(1.0f);
+        if (animationsDict.count(node->index))
+        {
+            glm::vec3 translation = node->translation;
+            glm::quat rotation    = node->rotation;
+            glm::vec3 scale       = node->scale;
+
+            const std::vector<Animation> anims = animationsDict[node->index];
+            for (Animation anim : anims)
+            {
+                float maxAnimationTime = anim.max_time;
+                if (time > maxAnimationTime)
+                {
+                    time = time - glm::floor(time / maxAnimationTime) * maxAnimationTime;
+                }
+                int next_idx   = findFrameIndex(anim.key_frame_times, time);
+                next_idx       = glm::min(next_idx, int(anim.key_frame_times.size() - 1));
+                int   prev_idx = glm::max(next_idx - 1, 0);
+                float ratio    = prev_idx == next_idx ?
+                                     0.0f :
+                                     (time - anim.key_frame_times[prev_idx]) /
+                                      (anim.key_frame_times[next_idx] - anim.key_frame_times[prev_idx]);
+
+                if (anim.path == "translation")
+                {
+                    glm::vec3 prev = glm::vec3(anim.key_frame_data[prev_idx]);
+                    glm::vec3 next = glm::vec3(anim.key_frame_data[next_idx]);
+                    translation    = prev * (1 - ratio) + next * ratio;
+                }
+                else if (anim.path == "rotation")
+                {
+                    glm::quat prev = glm::quat(anim.key_frame_data[prev_idx]);
+                    glm::quat next = glm::quat(anim.key_frame_data[next_idx]);
+                    rotation       = glm::slerp(prev, next, ratio);
+                }
+                else if (anim.path == "scale")
+                {
+                    glm::vec3 prev = glm::vec3(anim.key_frame_data[prev_idx]);
+                    glm::vec3 next = glm::vec3(anim.key_frame_data[next_idx]);
+                    scale          = prev * (1 - ratio) + next * ratio;
+                }
+            }
+            res = glm::scale(glm::translate(glm::mat4(rotation), translation), scale);
+        }
+        return res;
+    }
 
     // Draw a single node including child nodes (if present)
     void
@@ -876,6 +931,10 @@ public:
             {
                 const tinygltf::Node node = glTFInput.nodes[scene.nodes[i]];
                 glTFModel.loadNode(node, glTFInput, nullptr, scene.nodes[i], indexBuffer, vertexBuffer);
+            }
+            if (glTFInput.animations.size() > 0)
+            {
+                glTFModel.loadAnimations(glTFInput);
             }
         }
         else
