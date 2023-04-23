@@ -101,6 +101,15 @@ public:
                 delete child;
             }
         }
+        glm::mat4 getLocalMatrix()
+        {
+            glm::mat4 res(1.0f);
+            res = glm::translate(res, translation);
+            res *= glm::mat4(rotation);
+            res = glm::scale(res, scale);
+            return res;
+            // return glm::scale(glm::translate(glm::mat4(rotation), translation), scale);
+        }
     };
 
     /*
@@ -178,7 +187,7 @@ public:
     std::vector<Node*>    nodes;
     // std::vector<Animation> animations;
     std::map<int, std::vector<Animation>> animationsDict;
-    Node* rootNode;
+    Node*                                 rootNode = new Node();
 
     uint32_t activeAnimation = 0;
 
@@ -436,9 +445,12 @@ public:
                   std::vector<VulkanglTFModel::Vertex>& vertexBuffer)
     {
         VulkanglTFModel::Node* node = new VulkanglTFModel::Node {};
-        node->matrix                = glm::mat4(1.0f);
         node->parent                = parent;
         node->index                 = nodeIndex;
+        node->translation           = glm::vec3(0.0f);
+        node->rotation              = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        node->scale                 = glm::vec3(1.0f);
+        node->matrix                = glm::mat4(1.0f);
 
         // Get the local node matrix
         // It's either made up from translation, rotation, scale or a 4x4 matrix
@@ -675,21 +687,17 @@ public:
     }
 
     // Draw a single node including child nodes (if present)
-    void
-    drawNode(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout, VulkanglTFModel::Node* node, float time)
+    void drawNode(VkCommandBuffer        commandBuffer,
+                  VkPipelineLayout       pipelineLayout,
+                  VulkanglTFModel::Node* node,
+                  float                  time,
+                  glm::mat4              parentMatrix)
     {
+        // recurrently get the nodeMatrix and let it be the parentMatrix
+        glm::mat4 nodeMatrix = parentMatrix * node->getLocalMatrix();
         if (node->mesh.primitives.size() > 0)
         {
             // Pass the node's matrix via push constants
-            // Traverse the node hierarchy to the top-most parent to get the final matrix of the current node
-            glm::mat4              nodeMatrix    = node->matrix;
-            VulkanglTFModel::Node* currentParent = node->parent;
-            while (currentParent)
-            {
-                nodeMatrix    = currentParent->matrix * nodeMatrix;
-                currentParent = currentParent->parent;
-            }
-            // Pass the final matrix to the vertex shader using push constants
             vkCmdPushConstants(
                 commandBuffer, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &nodeMatrix);
             for (VulkanglTFModel::Primitive& primitive : node->mesh.primitives)
@@ -747,7 +755,7 @@ public:
         }
         for (auto& child : node->children)
         {
-            drawNode(commandBuffer, pipelineLayout, child, time);
+            drawNode(commandBuffer, pipelineLayout, child, time, nodeMatrix);
         }
     }
 
@@ -760,10 +768,7 @@ public:
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertices.buffer, offsets);
         vkCmdBindIndexBuffer(commandBuffer, indices.buffer, 0, VK_INDEX_TYPE_UINT32);
         // Render all nodes at top-level
-        for (auto& node : nodes)
-        {
-            drawNode(commandBuffer, pipelineLayout, node, time);
-        }
+        drawNode(commandBuffer, pipelineLayout, rootNode, time, glm::mat4(1.0f));
     }
 };
 
@@ -926,11 +931,17 @@ public:
             glTFModel.loadImages(glTFInput); // 加载纹理贴图
             glTFModel.loadMaterials(glTFInput);
             glTFModel.loadTextures(glTFInput);
-            const tinygltf::Scene& scene = glTFInput.scenes[0];
+            const tinygltf::Scene& scene    = glTFInput.scenes[0];
+            glTFModel.rootNode->index       = -1;
+            glTFModel.rootNode->translation = glm::vec3(0.0f);
+            glTFModel.rootNode->rotation    = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+            glTFModel.rootNode->scale       = glm::vec3(1.0f);
+            glTFModel.rootNode->matrix      = glm::mat4(1.0f);
+            glTFModel.nodes.push_back(glTFModel.rootNode);
             for (size_t i = 0; i < scene.nodes.size(); i++)
             {
                 const tinygltf::Node node = glTFInput.nodes[scene.nodes[i]];
-                glTFModel.loadNode(node, glTFInput, nullptr, scene.nodes[i], indexBuffer, vertexBuffer);
+                glTFModel.loadNode(node, glTFInput, glTFModel.rootNode, scene.nodes[i], indexBuffer, vertexBuffer);
             }
             if (glTFInput.animations.size() > 0)
             {
