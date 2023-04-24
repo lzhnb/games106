@@ -31,20 +31,7 @@
 
 #define ENABLE_VALIDATION false
 
-float CurrentTime()
-{
-    static uint64_t start = 0;
-    if (start == 0)
-        start =
-            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-                .count();
-    uint64_t ms =
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-            .count();
-    return (float)(ms - start) / 1000.f;
-}
-
-float DeltaTime()
+float StepTime()
 {
     static uint64_t last = 0;
     uint32_t        current =
@@ -152,11 +139,11 @@ public:
     struct Animation
     {
         std::string            path;
-        std::vector<float>     key_frame_times;
-        std::vector<glm::vec4> key_frame_data;
+        std::vector<float>     keyFrameTimes;
+        std::vector<glm::vec4> keyFrameData;
         uint32_t               nodeIndex;
-        float                  max_time;
-        float                  min_time;
+        float                  maxTime;
+        float                  minTime;
     };
 
     // A glTF material stores information in e.g. the texture that is attached to it and colors
@@ -211,9 +198,11 @@ public:
     std::vector<Texture>  textures;
     std::vector<Material> materials;
     std::vector<Node*>    nodes;
-    // std::vector<Animation> animations;
+    Node*                 rootNode = new Node();
+
     std::map<int, std::vector<Animation>> animationsDict;
-    Node*                                 rootNode = new Node();
+
+    float maxAnimationTime = 0.0f;
 
     uint32_t activeAnimation = 0;
 
@@ -378,7 +367,7 @@ public:
     }
 
     // POI: Load the animations from the glTF model
-    void loadAnimations(tinygltf::Model& input)
+    void loadAnimation(tinygltf::Model& input)
     {
         for (size_t i = 0; i < input.animations.size(); i++)
         {
@@ -442,22 +431,25 @@ public:
             for (size_t j = 0; j < glTFAnimation.channels.size(); j++)
             {
                 tinygltf::AnimationChannel glTFChannel = glTFAnimation.channels[j];
-                int                        target_node = glTFChannel.target_node;
+                int                        targetNode  = glTFChannel.target_node;
                 AnimationSampler           sampler     = samplers[glTFChannel.sampler];
                 Animation                  animation {};
-                animation.nodeIndex       = target_node;
-                animation.path            = glTFChannel.target_path;
-                animation.key_frame_data  = sampler.outputsVec4;
-                animation.key_frame_times = sampler.inputs;
-                animation.min_time        = sampler.inputs.front();
-                animation.max_time        = sampler.inputs.back();
-                if (animationsDict.count(target_node))
+                animation.nodeIndex     = targetNode;
+                animation.path          = glTFChannel.target_path;
+                animation.keyFrameData  = sampler.outputsVec4;
+                animation.keyFrameTimes = sampler.inputs;
+                animation.minTime       = sampler.inputs.front();
+                animation.maxTime       = sampler.inputs.back();
+
+                maxAnimationTime = glm::max(animation.maxTime, maxAnimationTime);
+
+                if (animationsDict.count(targetNode))
                 {
-                    animationsDict[target_node].push_back(animation);
+                    animationsDict[targetNode].push_back(animation);
                 }
                 else
                 {
-                    animationsDict[target_node] = {animation};
+                    animationsDict[targetNode] = {animation};
                 }
             }
         }
@@ -477,6 +469,7 @@ public:
         node->rotation              = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
         node->scale                 = glm::vec3(1.0f);
         node->matrix                = glm::mat4(1.0f);
+        nodes[nodeIndex]            = node;
 
         // Get the local node matrix
         // It's either made up from translation, rotation, scale or a 4x4 matrix
@@ -647,7 +640,7 @@ public:
         }
         else
         {
-            nodes.push_back(node);
+            rootNode = node; // nodes.push_back(node);
         }
     }
 
@@ -680,7 +673,6 @@ public:
 
     glm::mat4 animatedMatrix(VulkanglTFModel::Node* node, float time, bool loop)
     {
-        glm::mat4 res = glm::mat4(1.0f);
         if (animationsDict.count(node->index))
         {
             glm::vec3 translation = node->translation;
@@ -690,41 +682,46 @@ public:
             const std::vector<Animation> anims = animationsDict[node->index];
             for (Animation anim : anims)
             {
-                float maxAnimationTime = anim.max_time;
                 if (loop)
                 {
                     time = time - glm::floor(time / maxAnimationTime) * maxAnimationTime;
                 }
-                int next_idx   = findFrameIndex(anim.key_frame_times, time);
-                next_idx       = glm::min(next_idx, int(anim.key_frame_times.size() - 1));
-                int   prev_idx = glm::max(next_idx - 1, 0);
-                float ratio    = prev_idx == next_idx ?
-                                     0.0f :
-                                     (time - anim.key_frame_times[prev_idx]) /
-                                      (anim.key_frame_times[next_idx] - anim.key_frame_times[prev_idx]);
+                int next_idx = findFrameIndex(anim.keyFrameTimes, time);
+                int prev_idx = glm::max(next_idx - 1, 0);
+                next_idx     = glm::min(next_idx, int(anim.keyFrameTimes.size() - 1));
+                float ratio  = prev_idx == next_idx ? 0.0f :
+                                                      (time - anim.keyFrameTimes[prev_idx]) /
+                                                         (anim.keyFrameTimes[next_idx] - anim.keyFrameTimes[prev_idx]);
 
                 if (anim.path == "translation")
                 {
-                    glm::vec3 prev = glm::vec3(anim.key_frame_data[prev_idx]);
-                    glm::vec3 next = glm::vec3(anim.key_frame_data[next_idx]);
+                    glm::vec3 prev = glm::vec3(anim.keyFrameData[prev_idx]);
+                    glm::vec3 next = glm::vec3(anim.keyFrameData[next_idx]);
                     translation    = prev * (1 - ratio) + next * ratio;
                 }
                 else if (anim.path == "rotation")
                 {
-                    glm::quat prev = glm::quat(anim.key_frame_data[prev_idx]);
-                    glm::quat next = glm::quat(anim.key_frame_data[next_idx]);
+                    glm::quat prev = glm::quat(anim.keyFrameData[prev_idx]);
+                    glm::quat next = glm::quat(anim.keyFrameData[next_idx]);
                     rotation       = glm::slerp(prev, next, ratio);
                 }
                 else if (anim.path == "scale")
                 {
-                    glm::vec3 prev = glm::vec3(anim.key_frame_data[prev_idx]);
-                    glm::vec3 next = glm::vec3(anim.key_frame_data[next_idx]);
+                    glm::vec3 prev = glm::vec3(anim.keyFrameData[prev_idx]);
+                    glm::vec3 next = glm::vec3(anim.keyFrameData[next_idx]);
                     scale          = prev * (1 - ratio) + next * ratio;
                 }
             }
-            res = glm::scale(glm::translate(glm::mat4(rotation), translation), scale);
+            glm::mat4 res = glm::mat4(1.0f);
+            res           = glm::translate(res, translation);
+            res *= glm::mat4(rotation);
+            res = glm::scale(res, scale);
+            return res;
         }
-        return res;
+        else
+        {
+            return node->matrix;
+        }
     }
 
     // Draw a single node including child nodes (if present)
@@ -737,11 +734,18 @@ public:
     {
         // recurrently get the nodeMatrix and let it be the parentMatrix
         glm::mat4 nodeMatrix = parentMatrix * node->getLocalMatrix();
+        // glm::mat4 nodeMatrix = animatedMatrix(node, 0.0f, loop);
         if (node->mesh.primitives.size() > 0)
         {
+            glm::mat4 transInvNodeMatrix     = glm::transpose(glm::inverse(nodeMatrix));
+            glm::mat4 pushConstantMatrixs[2] = {nodeMatrix, transInvNodeMatrix};
             // Pass the node's matrix via push constants
-            vkCmdPushConstants(
-                commandBuffer, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &nodeMatrix);
+            vkCmdPushConstants(commandBuffer,
+                               pipelineLayout,
+                               VK_SHADER_STAGE_VERTEX_BIT,
+                               0,
+                               sizeof(pushConstantMatrixs),
+                               pushConstantMatrixs);
             for (VulkanglTFModel::Primitive& primitive : node->mesh.primitives)
             {
                 if (primitive.indexCount > 0)
@@ -753,7 +757,7 @@ public:
                     vkCmdPushConstants(commandBuffer,
                                        pipelineLayout,
                                        VK_SHADER_STAGE_FRAGMENT_BIT,
-                                       sizeof(glm::mat4), // NOTE: offset 来保证不修改之前的值
+                                       sizeof(pushConstantMatrixs), // NOTE: offset 来保证不修改之前的值
                                        sizeof(Factors::PushBlock),
                                        &factors);
                     // Get the texture index for this primitive
@@ -801,6 +805,89 @@ public:
         }
     }
 
+    // Draw a single node including child nodes (if present)
+    void drawAnimatedNode(VkCommandBuffer        commandBuffer,
+                          VkPipelineLayout       pipelineLayout,
+                          VulkanglTFModel::Node* node,
+                          float                  time,
+                          glm::mat4              parentMatrix,
+                          bool                   loop)
+    {
+        // recurrently get the nodeMatrix and let it be the parentMatrix
+        glm::mat4 nodeMatrix = animatedMatrix(node, time, loop);
+        nodeMatrix           = parentMatrix * nodeMatrix;
+
+        glm::mat4 transInvNodeMatrix     = glm::transpose(glm::inverse(nodeMatrix));
+        glm::mat4 pushConstantMatrixs[2] = {nodeMatrix, transInvNodeMatrix};
+
+        if (node->mesh.primitives.size() > 0)
+        {
+            // Pass the node's matrix via push constants
+            vkCmdPushConstants(commandBuffer,
+                               pipelineLayout,
+                               VK_SHADER_STAGE_VERTEX_BIT,
+                               0,
+                               sizeof(pushConstantMatrixs),
+                               pushConstantMatrixs);
+            for (VulkanglTFModel::Primitive& primitive : node->mesh.primitives)
+            {
+                if (primitive.indexCount > 0)
+                {
+                    // NOTE: support baseColorFactor/metallicFactor/roughnessFactor
+                    Factors factors(materials[primitive.materialIndex].baseColorFactor,
+                                    materials[primitive.materialIndex].metallicFactor,
+                                    materials[primitive.materialIndex].roughnessFactor);
+                    vkCmdPushConstants(commandBuffer,
+                                       pipelineLayout,
+                                       VK_SHADER_STAGE_FRAGMENT_BIT,
+                                       sizeof(pushConstantMatrixs), // NOTE: offset 来保证不修改之前的值
+                                       sizeof(Factors::PushBlock),
+                                       &factors);
+                    // Get the texture index for this primitive
+                    VulkanglTFModel::Texture texture =
+                        textures[materials[primitive.materialIndex].baseColorTextureIndex];
+                    // Bind the descriptor for the current primitive's texture
+                    // 对应 mesh.frag 中的 layout (set = 1, binding = 0)
+                    vkCmdBindDescriptorSets(commandBuffer,
+                                            VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                            pipelineLayout,
+                                            1,
+                                            1,
+                                            &images[texture.imageIndex].descriptorSet,
+                                            0,
+                                            nullptr);
+                    // Get the normal index for this primitive
+                    VulkanglTFModel::Texture normal = textures[materials[primitive.materialIndex].normalTextureIndex];
+                    vkCmdBindDescriptorSets(commandBuffer,
+                                            VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                            pipelineLayout,
+                                            2,
+                                            1,
+                                            &images[normal.imageIndex].descriptorSet,
+                                            0,
+                                            nullptr);
+                    // Get the BRDF index for this primitive
+                    VulkanglTFModel::Texture BRDF =
+                        textures[materials[primitive.materialIndex].metallicRoughnessTextureIndex];
+                    vkCmdBindDescriptorSets(commandBuffer,
+                                            VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                            pipelineLayout,
+                                            3,
+                                            1,
+                                            &images[BRDF.imageIndex].descriptorSet,
+                                            0,
+                                            nullptr);
+                    // NOTE: 绘制
+                    vkCmdDrawIndexed(commandBuffer, primitive.indexCount, 1, primitive.firstIndex, 0, 0);
+                }
+            }
+        }
+        for (auto& child : node->children)
+        {
+            drawAnimatedNode(commandBuffer, pipelineLayout, child, time, nodeMatrix, loop);
+        }
+    }
+
     // Draw the glTF scene starting at the top-level-nodes
     void draw(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout, float time, bool loop)
     {
@@ -810,7 +897,7 @@ public:
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertices.buffer, offsets);
         vkCmdBindIndexBuffer(commandBuffer, indices.buffer, 0, VK_INDEX_TYPE_UINT32);
         // Render all nodes at top-level
-        drawNode(commandBuffer, pipelineLayout, rootNode, time, glm::mat4(1.0f), true);
+        drawNode(commandBuffer, pipelineLayout, rootNode, time, glm::mat4(1.0f), loop);
     }
 
     // Draw the glTF scene starting at the top-level-nodes
@@ -822,7 +909,7 @@ public:
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertices.buffer, offsets);
         vkCmdBindIndexBuffer(commandBuffer, indices.buffer, 0, VK_INDEX_TYPE_UINT32);
         // Render all nodes at top-level
-        drawNode(commandBuffer, pipelineLayout, rootNode, time, glm::mat4(1.0f), true);
+        drawAnimatedNode(commandBuffer, pipelineLayout, rootNode, time, glm::mat4(1.0f), loop);
     }
 };
 
@@ -953,17 +1040,17 @@ public:
         vkCmdBindPipeline(
             drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, wireframe ? pipelines.wireframe : pipelines.solid);
 
-        // glTFModel.draw(drawCmdBuffers[i], pipelineLayout, frameTimer, true);
-        if (enableAnimation)
-        {
-            timeline += DeltaTime() * speed;
-            glTFModel.drawAnimated(drawCmdBuffers[i], pipelineLayout, timeline, true);
-        }
-        else
-        {
-            DeltaTime();
-            glTFModel.drawAnimated(drawCmdBuffers[i], pipelineLayout, timeline, true);
-        }
+        glTFModel.draw(drawCmdBuffers[i], pipelineLayout, frameTimer, true);
+        // if (enableAnimation)
+        // {
+        //     timeline += StepTime() * speed;
+        //     glTFModel.drawAnimated(drawCmdBuffers[i], pipelineLayout, timeline, true);
+        // }
+        // else
+        // {
+        //     StepTime();
+        //     glTFModel.drawAnimated(drawCmdBuffers[i], pipelineLayout, timeline, true);
+        // }
 
         drawUI(drawCmdBuffers[i]);
         // 结束渲染流程
@@ -998,21 +1085,17 @@ public:
             glTFModel.loadImages(glTFInput); // 加载纹理贴图
             glTFModel.loadMaterials(glTFInput);
             glTFModel.loadTextures(glTFInput);
-            const tinygltf::Scene& scene    = glTFInput.scenes[0];
-            glTFModel.rootNode->index       = -1;
-            glTFModel.rootNode->translation = glm::vec3(0.0f);
-            glTFModel.rootNode->rotation    = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
-            glTFModel.rootNode->scale       = glm::vec3(1.0f);
-            glTFModel.rootNode->matrix      = glm::mat4(1.0f);
-            glTFModel.nodes.push_back(glTFModel.rootNode);
+
+            glTFModel.nodes.resize(glTFInput.nodes.size());
+            const tinygltf::Scene& scene = glTFInput.scenes[0];
             for (size_t i = 0; i < scene.nodes.size(); i++)
             {
                 const tinygltf::Node node = glTFInput.nodes[scene.nodes[i]];
-                glTFModel.loadNode(node, glTFInput, glTFModel.rootNode, scene.nodes[i], indexBuffer, vertexBuffer);
+                glTFModel.loadNode(node, glTFInput, nullptr, scene.nodes[i], indexBuffer, vertexBuffer);
             }
             if (glTFInput.animations.size() > 0)
             {
-                glTFModel.loadAnimations(glTFInput);
+                glTFModel.loadAnimation(glTFInput);
             }
         }
         else

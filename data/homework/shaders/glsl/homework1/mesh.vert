@@ -16,6 +16,7 @@ layout (set = 0, binding = 0) uniform UBOScene
 
 layout(push_constant) uniform PushConsts {
 	mat4 model;
+	mat4 transInvModel;
 } primitive;
 
 layout (location = 0) out vec3 outNormal;
@@ -32,7 +33,7 @@ void main()
 	gl_Position = uboScene.projection * uboScene.view * primitive.model * vec4(inPos.xyz, 1.0);
 	
 	vec4 pos = uboScene.view * vec4(inPos, 1.0);
-	outNormal = mat3(uboScene.view) * mat3(primitive.model) * inNormal;
+	outNormal = mat3(uboScene.view) * mat3(primitive.transInvModel) * inNormal;
 	outLightVec = uboScene.lightPos.xyz - pos.xyz;
 	outViewVec = uboScene.viewPos.xyz - pos.xyz;
 	outTangent = (uboScene.view * primitive.model * vec4(inTangent, 0.0f)).xyz;
