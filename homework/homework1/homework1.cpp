@@ -801,6 +801,10 @@ public:
     VkPipelineLayout pipelineLayout;
     VkDescriptorSet  descriptorSet;
 
+    float speed           = 1.f;
+    float timeline        = 0.f;
+    bool  enableAnimation = true;
+
     struct DescriptorSetLayouts
     {
         VkDescriptorSetLayout matrices;
@@ -847,7 +851,7 @@ public:
         };
     }
 
-    void buildCommandBuffers()
+    void buildCommandBuffers(uint32_t i)
     {
         // 开始分配指令缓冲对象，使用它记录绘制指令。由于绘制操作是在每个帧缓冲上进行的，我们需要为交换链中的
         // 每一个图像分配一个指令缓冲对象。为此，我们添加了一个数组作为成员变量来存储创建的 VkCommandBuffer 对象。
@@ -876,32 +880,29 @@ public:
         // 任何位于裁剪矩形外的像素都会被光栅化程序丢弃。
         const VkRect2D scissor = vks::initializers::rect2D(width, height, 0, 0);
 
-        for (int32_t i = 0; i < drawCmdBuffers.size(); ++i)
-        {
-            renderPassBeginInfo.framebuffer = frameBuffers[i]; // 用于指定使用的帧缓冲对象
-            // 开始指令缓冲的记录操作，通过 cmdBufInfo 来指定一些有关指令缓冲的使用细节
-            VK_CHECK_RESULT(vkBeginCommandBuffer(drawCmdBuffers[i], &cmdBufInfo));
-            // 所有可以记录指令到指令缓冲的函数的函数名都带有一个 vkCmd 前缀。
-            // 这类函数的第一个参数是用于记录指令的指令缓冲对象。第二个参数是使用的渲染流程的信息。
-            // 最后一个参数是用来指定渲染流程如何提供绘制指令的标记
-            // 开始一个渲染流程
-            vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
-            vkCmdSetViewport(drawCmdBuffers[i], 0, 1, &viewport);
-            vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
-            // Bind scene matrices descriptor to set 0
-            // 为每个交换链图像绑定对应的描述符集
-            // 对应 mesh.vert 中的 layout (set = 0, binding = 0)
-            vkCmdBindDescriptorSets(
-                drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
-            // 绑定图形管线，第二个参数用于指定管线对象是图形管线还是计算管线
-            vkCmdBindPipeline(
-                drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, wireframe ? pipelines.wireframe : pipelines.solid);
-            glTFModel.draw(drawCmdBuffers[i], pipelineLayout, frameTimer);
-            drawUI(drawCmdBuffers[i]);
-            // 结束渲染流程
-            vkCmdEndRenderPass(drawCmdBuffers[i]);
-            VK_CHECK_RESULT(vkEndCommandBuffer(drawCmdBuffers[i]));
-        }
+        renderPassBeginInfo.framebuffer = frameBuffers[i]; // 用于指定使用的帧缓冲对象
+        // 开始指令缓冲的记录操作，通过 cmdBufInfo 来指定一些有关指令缓冲的使用细节
+        VK_CHECK_RESULT(vkBeginCommandBuffer(drawCmdBuffers[i], &cmdBufInfo));
+        // 所有可以记录指令到指令缓冲的函数的函数名都带有一个 vkCmd 前缀。
+        // 这类函数的第一个参数是用于记录指令的指令缓冲对象。第二个参数是使用的渲染流程的信息。
+        // 最后一个参数是用来指定渲染流程如何提供绘制指令的标记
+        // 开始一个渲染流程
+        vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdSetViewport(drawCmdBuffers[i], 0, 1, &viewport);
+        vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
+        // Bind scene matrices descriptor to set 0
+        // 为每个交换链图像绑定对应的描述符集
+        // 对应 mesh.vert 中的 layout (set = 0, binding = 0)
+        vkCmdBindDescriptorSets(
+            drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
+        // 绑定图形管线，第二个参数用于指定管线对象是图形管线还是计算管线
+        vkCmdBindPipeline(
+            drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, wireframe ? pipelines.wireframe : pipelines.solid);
+        glTFModel.draw(drawCmdBuffers[i], pipelineLayout, frameTimer);
+        drawUI(drawCmdBuffers[i]);
+        // 结束渲染流程
+        vkCmdEndRenderPass(drawCmdBuffers[i]);
+        VK_CHECK_RESULT(vkEndCommandBuffer(drawCmdBuffers[i]));
     }
 
     void loadglTFFile(std::string filename)
@@ -1233,13 +1234,20 @@ public:
         prepareUniformBuffers();
         setupDescriptors();
         preparePipelines();
-        buildCommandBuffers();
+
         prepared = true;
     }
 
     virtual void render()
     {
-        renderFrame();
+        VulkanExampleBase::prepareFrame();
+        buildCommandBuffers(currentBuffer);
+
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers    = &drawCmdBuffers[currentBuffer];
+        VK_CHECK_RESULT(vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE));
+        VulkanExampleBase::submitFrame();
+
         if (camera.updated)
         {
             updateUniformBuffers();
@@ -1254,8 +1262,12 @@ public:
         {
             if (overlay->checkBox("Wireframe", &wireframe))
             {
-                buildCommandBuffers();
+                for (uint32_t i = 0; i < drawCmdBuffers.size(); i++)
+                {
+                    buildCommandBuffers(i);
+                }
             }
+            overlay->checkBox("enable animation", &enableAnimation);
         }
     }
 };
