@@ -33,10 +33,10 @@
 
 float StepTime()
 {
-    static uint64_t last = 0;
-    uint32_t        current =
+    static uint64_t last    = 0;
+    uint32_t        current = uint32_t(
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-            .count();
+            .count());
     if (last == 0)
         last = current;
     uint64_t ms = current - last;
@@ -121,20 +121,12 @@ public:
             res *= glm::mat4(rotation);
             res = glm::scale(res, scale);
             return res;
-            // return glm::scale(glm::translate(glm::mat4(rotation), translation), scale);
         }
     };
 
     /*
         Animation related structures
     */
-
-    struct AnimationSampler
-    {
-        std::string            interpolation;
-        std::vector<float>     inputs;
-        std::vector<glm::vec4> outputsVec4;
-    };
 
     struct Animation
     {
@@ -149,13 +141,14 @@ public:
     // A glTF material stores information in e.g. the texture that is attached to it and colors
     struct Material
     {
-        glm::vec4 baseColorFactor = glm::vec4(1.0f);
-        uint32_t  baseColorTextureIndex;
-        uint32_t  normalTextureIndex;
-        uint32_t  occlusionTextureIndex;
-        uint32_t  metallicRoughnessTextureIndex;
-        float     metallicFactor  = 1.0f;
-        float     roughnessFactor = 1.0f;
+        glm::vec4       baseColorFactor = glm::vec4(1.0f);
+        uint32_t        baseColorTextureIndex;
+        uint32_t        normalTextureIndex;
+        uint32_t        occlusionTextureIndex;
+        uint32_t        metallicRoughnessTextureIndex;
+        float           metallicFactor  = 1.0f;
+        float           roughnessFactor = 1.0f;
+        VkDescriptorSet descriptorSet;
     };
 
     // Contains the texture for a single glTF image
@@ -164,7 +157,6 @@ public:
     {
         vks::Texture2D texture;
         // We also store (and create) a descriptor set that's used to access this texture from the fragment shader
-        VkDescriptorSet descriptorSet;
     };
 
     // A glTF texture stores a reference to the image and a sampler
@@ -631,9 +623,9 @@ public:
         if (time < timeline[0])
             return 0;
         if (time > timeline[timeline.size() - 1])
-            return timeline.size();
+            return int(timeline.size());
 
-        int s = 0, e = timeline.size();
+        int s = 0, e = int(timeline.size());
         while (s < e - 1)
         {
             int c = (s + e) / 2;
@@ -742,8 +734,8 @@ public:
                                        sizeof(Factors::PushBlock),
                                        &factors);
                     // Get the texture index for this primitive
-                    VulkanglTFModel::Texture texture =
-                        textures[materials[primitive.materialIndex].baseColorTextureIndex];
+                    // VulkanglTFModel::Texture texture =
+                    //     textures[materials[primitive.materialIndex].baseColorTextureIndex];
                     // Bind the descriptor for the current primitive's texture
                     // 对应 mesh.frag 中的 layout (set = 1, binding = 0)
                     vkCmdBindDescriptorSets(commandBuffer,
@@ -751,28 +743,7 @@ public:
                                             pipelineLayout,
                                             1,
                                             1,
-                                            &images[texture.imageIndex].descriptorSet,
-                                            0,
-                                            nullptr);
-                    // Get the normal index for this primitive
-                    VulkanglTFModel::Texture normal = textures[materials[primitive.materialIndex].normalTextureIndex];
-                    vkCmdBindDescriptorSets(commandBuffer,
-                                            VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                            pipelineLayout,
-                                            2,
-                                            1,
-                                            &images[normal.imageIndex].descriptorSet,
-                                            0,
-                                            nullptr);
-                    // Get the BRDF index for this primitive
-                    VulkanglTFModel::Texture BRDF =
-                        textures[materials[primitive.materialIndex].metallicRoughnessTextureIndex];
-                    vkCmdBindDescriptorSets(commandBuffer,
-                                            VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                            pipelineLayout,
-                                            3,
-                                            1,
-                                            &images[BRDF.imageIndex].descriptorSet,
+                                            &materials[primitive.materialIndex].descriptorSet,
                                             0,
                                             nullptr);
                     // NOTE: 绘制
@@ -823,8 +794,8 @@ public:
                                        sizeof(Factors::PushBlock),
                                        &factors);
                     // Get the texture index for this primitive
-                    VulkanglTFModel::Texture texture =
-                        textures[materials[primitive.materialIndex].baseColorTextureIndex];
+                    // VulkanglTFModel::Texture texture =
+                    //     textures[materials[primitive.materialIndex].baseColorTextureIndex];
                     // Bind the descriptor for the current primitive's texture
                     // 对应 mesh.frag 中的 layout (set = 1, binding = 0)
                     vkCmdBindDescriptorSets(commandBuffer,
@@ -832,28 +803,7 @@ public:
                                             pipelineLayout,
                                             1,
                                             1,
-                                            &images[texture.imageIndex].descriptorSet,
-                                            0,
-                                            nullptr);
-                    // Get the normal index for this primitive
-                    VulkanglTFModel::Texture normal = textures[materials[primitive.materialIndex].normalTextureIndex];
-                    vkCmdBindDescriptorSets(commandBuffer,
-                                            VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                            pipelineLayout,
-                                            2,
-                                            1,
-                                            &images[normal.imageIndex].descriptorSet,
-                                            0,
-                                            nullptr);
-                    // Get the BRDF index for this primitive
-                    VulkanglTFModel::Texture BRDF =
-                        textures[materials[primitive.materialIndex].metallicRoughnessTextureIndex];
-                    vkCmdBindDescriptorSets(commandBuffer,
-                                            VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                            pipelineLayout,
-                                            3,
-                                            1,
-                                            &images[BRDF.imageIndex].descriptorSet,
+                                            &materials[primitive.materialIndex].descriptorSet,
                                             0,
                                             nullptr);
                     // NOTE: 绘制
@@ -929,8 +879,6 @@ public:
     {
         VkDescriptorSetLayout matrices;
         VkDescriptorSetLayout textures;
-        VkDescriptorSetLayout normals;
-        VkDescriptorSetLayout BRDFs;
     } descriptorSetLayouts;
 
     VulkanExample() : VulkanExampleBase(ENABLE_VALIDATION)
@@ -956,8 +904,6 @@ public:
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
         vkDestroyDescriptorSetLayout(device, descriptorSetLayouts.matrices, nullptr);
         vkDestroyDescriptorSetLayout(device, descriptorSetLayouts.textures, nullptr);
-        vkDestroyDescriptorSetLayout(device, descriptorSetLayouts.normals, nullptr);
-        vkDestroyDescriptorSetLayout(device, descriptorSetLayouts.BRDFs, nullptr);
 
         uboBuffer.buffer.destroy();
     }
@@ -1186,25 +1132,25 @@ public:
         VK_CHECK_RESULT(
             vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCI, nullptr, &descriptorSetLayouts.matrices));
         // Descriptor set layout for passing material textures
+        VkDescriptorSetLayoutBinding fragmentBindings[] = {
+            vks::initializers::descriptorSetLayoutBinding(
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0),
+            vks::initializers::descriptorSetLayoutBinding(
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 1),
+            vks::initializers::descriptorSetLayoutBinding(
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 2),
+        };
+        descriptorSetLayoutCI =
+            vks::initializers::descriptorSetLayoutCreateInfo(fragmentBindings, _countof(fragmentBindings));
         setLayoutBinding = vks::initializers::descriptorSetLayoutBinding(
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0);
         VK_CHECK_RESULT(
             vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCI, nullptr, &descriptorSetLayouts.textures));
-        setLayoutBinding = vks::initializers::descriptorSetLayoutBinding(
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0);
-        VK_CHECK_RESULT(
-            vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCI, nullptr, &descriptorSetLayouts.normals));
-        setLayoutBinding = vks::initializers::descriptorSetLayoutBinding(
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0);
-        VK_CHECK_RESULT(
-            vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCI, nullptr, &descriptorSetLayouts.BRDFs));
 
         // Pipeline layout using both descriptor sets (set 0 = matrices, set 1 = material)
         // 管线布局
-        std::array<VkDescriptorSetLayout, 4> setLayouts = {descriptorSetLayouts.matrices,
-                                                           descriptorSetLayouts.textures,
-                                                           descriptorSetLayouts.normals,
-                                                           descriptorSetLayouts.BRDFs};
+        std::array<VkDescriptorSetLayout, 2> setLayouts = {descriptorSetLayouts.matrices,
+                                                           descriptorSetLayouts.textures};
         VkPipelineLayoutCreateInfo           pipelineLayoutCI =
             vks::initializers::pipelineLayoutCreateInfo(setLayouts.data(), static_cast<uint32_t>(setLayouts.size()));
         // We will use push constants to push the local matrices of a primitive to the vertex shader
@@ -1225,14 +1171,32 @@ public:
         vkUpdateDescriptorSets(device, 1, &writeDescriptorSet, 0, nullptr);
 
         // Descriptor sets for materials
-        for (auto& image : glTFModel.images)
+        // 对应 layout(set, binding) 中的 binding
+        for (auto& material : glTFModel.materials)
         {
-            const VkDescriptorSetAllocateInfo allocInfo =
+            VkDescriptorSetAllocateInfo allocInfo =
                 vks::initializers::descriptorSetAllocateInfo(descriptorPool, &descriptorSetLayouts.textures, 1);
-            VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &image.descriptorSet));
-            VkWriteDescriptorSet writeDescriptorSet = vks::initializers::writeDescriptorSet(
-                image.descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 0, &image.texture.descriptor);
-            vkUpdateDescriptorSets(device, 1, &writeDescriptorSet, 0, nullptr);
+            VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &material.descriptorSet));
+
+            VkWriteDescriptorSet writeDescriptorSets[3];
+
+            writeDescriptorSets[0] = vks::initializers::writeDescriptorSet(
+                material.descriptorSet,
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                0,
+                &glTFModel.images[material.baseColorTextureIndex].texture.descriptor);
+            writeDescriptorSets[1] = vks::initializers::writeDescriptorSet(
+                material.descriptorSet,
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                1,
+                &glTFModel.images[material.normalTextureIndex].texture.descriptor);
+            writeDescriptorSets[2] = vks::initializers::writeDescriptorSet(
+                material.descriptorSet,
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                2,
+                &glTFModel.images[material.metallicRoughnessTextureIndex].texture.descriptor);
+
+            vkUpdateDescriptorSets(device, 3, writeDescriptorSets, 0, NULL);
         }
     }
 
