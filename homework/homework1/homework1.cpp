@@ -138,12 +138,12 @@ public:
 
     struct Animation
     {
-        std::string            path;
-        std::vector<float>     keyFrameTimes;
-        std::vector<glm::vec4> keyFrameData;
-        uint32_t               nodeIndex;
-        float                  maxTime;
-        float                  minTime;
+        std::string        path;
+        std::vector<float> keyFrameTimes;
+        std::vector<float> keyFrameData;
+        uint32_t           nodeIndex;
+        double             maxTime;
+        double             minTime;
     };
 
     // A glTF material stores information in e.g. the texture that is attached to it and colors
@@ -202,16 +202,13 @@ public:
 
     std::map<int, std::vector<Animation>> animationsDict;
 
-    float maxAnimationTime = 0.0f;
+    double maxAnimationTime = 0.0f;
 
     uint32_t activeAnimation = 0;
 
     ~VulkanglTFModel()
     {
-        for (auto node : nodes)
-        {
-            delete node;
-        }
+        delete rootNode;
         // Release all Vulkan resources allocated for the model
         vkDestroyBuffer(vulkanDevice->logicalDevice, vertices.buffer, nullptr);
         vkFreeMemory(vulkanDevice->logicalDevice, vertices.memory, nullptr);
@@ -367,56 +364,54 @@ public:
     }
 
     // POI: Load the animations from the glTF model
-    void loadAnimation(tinygltf::Model& input)
+    void loadAnimation(tinygltf::Model& model)
     {
-        for (size_t i = 0; i < input.animations.size(); i++)
+        for (tinygltf::Animation& glTFAnimation : model.animations)
         {
-            tinygltf::Animation glTFAnimation = input.animations[i];
-
             // Samplers
-            std::vector<AnimationSampler> samplers;
-            samplers.resize(glTFAnimation.samplers.size());
-            for (size_t j = 0; j < glTFAnimation.samplers.size(); j++)
+            for (tinygltf::AnimationChannel& channel : glTFAnimation.channels)
             {
-                tinygltf::AnimationSampler glTFSampler = glTFAnimation.samplers[j];
-                AnimationSampler&          dstSampler  = samplers[j];
-                dstSampler.interpolation               = glTFSampler.interpolation;
+                Animation animation {};
+                animation.path      = channel.target_path;
+                int targetNode      = channel.target_node;
+                animation.nodeIndex = targetNode;
+
+                tinygltf::AnimationSampler glTFSampler = glTFAnimation.samplers[channel.sampler];
 
                 // Read sampler keyframe input time values
                 {
-                    const tinygltf::Accessor&   accessor   = input.accessors[glTFSampler.input];
-                    const tinygltf::BufferView& bufferView = input.bufferViews[accessor.bufferView];
-                    const tinygltf::Buffer&     buffer     = input.buffers[bufferView.buffer];
+                    const tinygltf::Accessor&   accessor   = model.accessors[glTFSampler.input];
+                    const tinygltf::BufferView& bufferView = model.bufferViews[accessor.bufferView];
+                    const tinygltf::Buffer&     buffer     = model.buffers[bufferView.buffer];
                     const void*                 dataPtr    = &buffer.data[accessor.byteOffset + bufferView.byteOffset];
                     const float*                buf        = static_cast<const float*>(dataPtr);
                     for (size_t index = 0; index < accessor.count; index++)
                     {
-                        dstSampler.inputs.push_back(buf[index]);
+                        animation.keyFrameTimes.push_back(buf[index]);
                     }
+                    animation.maxTime = *((const double*)accessor.maxValues.data());
+                    animation.minTime = *((const double*)accessor.minValues.data());
+                    maxAnimationTime  = glm::max(animation.maxTime, maxAnimationTime);
                 }
 
                 // Read sampler keyframe output translate/rotate/scale values
                 {
-                    const tinygltf::Accessor&   accessor   = input.accessors[glTFSampler.output];
-                    const tinygltf::BufferView& bufferView = input.bufferViews[accessor.bufferView];
-                    const tinygltf::Buffer&     buffer     = input.buffers[bufferView.buffer];
+                    const tinygltf::Accessor&   accessor   = model.accessors[glTFSampler.output];
+                    const tinygltf::BufferView& bufferView = model.bufferViews[accessor.bufferView];
+                    const tinygltf::Buffer&     buffer     = model.buffers[bufferView.buffer];
                     const void*                 dataPtr    = &buffer.data[accessor.byteOffset + bufferView.byteOffset];
+
+                    std::vector<float> res;
                     switch (accessor.type)
                     {
                         case TINYGLTF_TYPE_VEC3: {
-                            const glm::vec3* buf = static_cast<const glm::vec3*>(dataPtr);
-                            for (size_t index = 0; index < accessor.count; index++)
-                            {
-                                dstSampler.outputsVec4.push_back(glm::vec4(buf[index], 0.0f));
-                            }
+                            res.resize(accessor.count * 3 * sizeof(float));
+                            memcpy(res.data(), dataPtr, accessor.count * 3 * sizeof(float));
                             break;
                         }
                         case TINYGLTF_TYPE_VEC4: {
-                            const glm::vec4* buf = static_cast<const glm::vec4*>(dataPtr);
-                            for (size_t index = 0; index < accessor.count; index++)
-                            {
-                                dstSampler.outputsVec4.push_back(buf[index]);
-                            }
+                            res.resize(accessor.count * 3 * sizeof(float));
+                            memcpy(res.data(), dataPtr, accessor.count * 4 * sizeof(float));
                             break;
                         }
                         default: {
@@ -424,39 +419,22 @@ public:
                             break;
                         }
                     }
+                    animation.keyFrameData = res;
                 }
-            }
-
-            // build animationsDict according to the channels
-            for (size_t j = 0; j < glTFAnimation.channels.size(); j++)
-            {
-                tinygltf::AnimationChannel glTFChannel = glTFAnimation.channels[j];
-                int                        targetNode  = glTFChannel.target_node;
-                AnimationSampler           sampler     = samplers[glTFChannel.sampler];
-                Animation                  animation {};
-                animation.nodeIndex     = targetNode;
-                animation.path          = glTFChannel.target_path;
-                animation.keyFrameData  = sampler.outputsVec4;
-                animation.keyFrameTimes = sampler.inputs;
-                animation.minTime       = sampler.inputs.front();
-                animation.maxTime       = sampler.inputs.back();
-
-                maxAnimationTime = glm::max(animation.maxTime, maxAnimationTime);
-
                 if (animationsDict.count(targetNode))
                 {
                     animationsDict[targetNode].push_back(animation);
                 }
                 else
                 {
-                    animationsDict[targetNode] = {animation};
+                    animationsDict[targetNode] = std::vector<Animation> {animation};
                 }
             }
         }
     }
 
     void loadNode(const tinygltf::Node&                 inputNode,
-                  const tinygltf::Model&                input,
+                  const tinygltf::Model&                model,
                   VulkanglTFModel::Node*                parent,
                   uint32_t                              nodeIndex,
                   std::vector<uint32_t>&                indexBuffer,
@@ -504,7 +482,7 @@ public:
             for (size_t i = 0; i < inputNode.children.size(); i++)
             {
                 loadNode(
-                    input.nodes[inputNode.children[i]], input, node, inputNode.children[i], indexBuffer, vertexBuffer);
+                    model.nodes[inputNode.children[i]], model, node, inputNode.children[i], indexBuffer, vertexBuffer);
             }
         }
 
@@ -512,7 +490,7 @@ public:
         // In glTF this is done via accessors and buffer views
         if (inputNode.mesh > -1)
         {
-            const tinygltf::Mesh mesh = input.meshes[inputNode.mesh];
+            const tinygltf::Mesh mesh = model.meshes[inputNode.mesh];
             // Iterate through all primitives of this node's mesh
             for (size_t i = 0; i < mesh.primitives.size(); i++)
             {
@@ -532,39 +510,39 @@ public:
                     if (glTFPrimitive.attributes.find("POSITION") != glTFPrimitive.attributes.end())
                     {
                         const tinygltf::Accessor& accessor =
-                            input.accessors[glTFPrimitive.attributes.find("POSITION")->second];
-                        const tinygltf::BufferView& view = input.bufferViews[accessor.bufferView];
+                            model.accessors[glTFPrimitive.attributes.find("POSITION")->second];
+                        const tinygltf::BufferView& view = model.bufferViews[accessor.bufferView];
                         positionBuffer                   = reinterpret_cast<const float*>(
-                            &(input.buffers[view.buffer].data[accessor.byteOffset + view.byteOffset]));
+                            &(model.buffers[view.buffer].data[accessor.byteOffset + view.byteOffset]));
                         vertexCount = accessor.count;
                     }
                     // Get buffer data for vertex normals
                     if (glTFPrimitive.attributes.find("NORMAL") != glTFPrimitive.attributes.end())
                     {
                         const tinygltf::Accessor& accessor =
-                            input.accessors[glTFPrimitive.attributes.find("NORMAL")->second];
-                        const tinygltf::BufferView& view = input.bufferViews[accessor.bufferView];
+                            model.accessors[glTFPrimitive.attributes.find("NORMAL")->second];
+                        const tinygltf::BufferView& view = model.bufferViews[accessor.bufferView];
                         normalsBuffer                    = reinterpret_cast<const float*>(
-                            &(input.buffers[view.buffer].data[accessor.byteOffset + view.byteOffset]));
+                            &(model.buffers[view.buffer].data[accessor.byteOffset + view.byteOffset]));
                     }
                     // NOTE: tangentBuffer
                     if (glTFPrimitive.attributes.find("TANGENT") != glTFPrimitive.attributes.end())
                     {
                         const tinygltf::Accessor& accessor =
-                            input.accessors[glTFPrimitive.attributes.find("TANGENT")->second];
-                        const tinygltf::BufferView& view = input.bufferViews[accessor.bufferView];
+                            model.accessors[glTFPrimitive.attributes.find("TANGENT")->second];
+                        const tinygltf::BufferView& view = model.bufferViews[accessor.bufferView];
                         tangentBuffer                    = reinterpret_cast<const float*>(
-                            &(input.buffers[view.buffer].data[accessor.byteOffset + view.byteOffset]));
+                            &(model.buffers[view.buffer].data[accessor.byteOffset + view.byteOffset]));
                     }
                     // Get buffer data for vertex texture coordinates
                     // glTF supports multiple sets, we only load the first one
                     if (glTFPrimitive.attributes.find("TEXCOORD_0") != glTFPrimitive.attributes.end())
                     {
                         const tinygltf::Accessor& accessor =
-                            input.accessors[glTFPrimitive.attributes.find("TEXCOORD_0")->second];
-                        const tinygltf::BufferView& view = input.bufferViews[accessor.bufferView];
+                            model.accessors[glTFPrimitive.attributes.find("TEXCOORD_0")->second];
+                        const tinygltf::BufferView& view = model.bufferViews[accessor.bufferView];
                         texCoordsBuffer                  = reinterpret_cast<const float*>(
-                            &(input.buffers[view.buffer].data[accessor.byteOffset + view.byteOffset]));
+                            &(model.buffers[view.buffer].data[accessor.byteOffset + view.byteOffset]));
                     }
 
                     // Append data to model's vertex buffer
@@ -584,9 +562,9 @@ public:
                 }
                 // Indices
                 {
-                    const tinygltf::Accessor&   accessor   = input.accessors[glTFPrimitive.indices];
-                    const tinygltf::BufferView& bufferView = input.bufferViews[accessor.bufferView];
-                    const tinygltf::Buffer&     buffer     = input.buffers[bufferView.buffer];
+                    const tinygltf::Accessor&   accessor   = model.accessors[glTFPrimitive.indices];
+                    const tinygltf::BufferView& bufferView = model.bufferViews[accessor.bufferView];
+                    const tinygltf::Buffer&     buffer     = model.buffers[bufferView.buffer];
 
                     indexCount += static_cast<uint32_t>(accessor.count);
 
@@ -675,16 +653,19 @@ public:
     {
         if (animationsDict.count(node->index))
         {
-            glm::vec3 translation = node->translation;
-            glm::quat rotation    = node->rotation;
-            glm::vec3 scale       = node->scale;
+            glm::vec3 origin_translation = node->translation;
+            glm::quat origin_rotation    = node->rotation;
+            glm::vec3 origin_scale       = node->scale;
+            glm::vec3 translation        = node->translation;
+            glm::quat rotation           = node->rotation;
+            glm::vec3 scale              = node->scale;
 
             const std::vector<Animation> anims = animationsDict[node->index];
             for (Animation anim : anims)
             {
                 if (loop)
                 {
-                    time = time - glm::floor(time / maxAnimationTime) * maxAnimationTime;
+                    time = time - glm::floor(time / float(maxAnimationTime)) * float(maxAnimationTime);
                 }
                 int next_idx = findFrameIndex(anim.keyFrameTimes, time);
                 int prev_idx = glm::max(next_idx - 1, 0);
@@ -695,20 +676,20 @@ public:
 
                 if (anim.path == "translation")
                 {
-                    glm::vec3 prev = glm::vec3(anim.keyFrameData[prev_idx]);
-                    glm::vec3 next = glm::vec3(anim.keyFrameData[next_idx]);
+                    glm::vec3 prev = glm::make_vec3(anim.keyFrameData.data() + prev_idx * 3);
+                    glm::vec3 next = glm::make_vec3(anim.keyFrameData.data() + next_idx * 3);
                     translation    = prev * (1 - ratio) + next * ratio;
                 }
                 else if (anim.path == "rotation")
                 {
-                    glm::quat prev = glm::quat(anim.keyFrameData[prev_idx]);
-                    glm::quat next = glm::quat(anim.keyFrameData[next_idx]);
+                    glm::quat prev = glm::make_quat(anim.keyFrameData.data() + prev_idx * 4);
+                    glm::quat next = glm::make_quat(anim.keyFrameData.data() + next_idx * 4);
                     rotation       = glm::slerp(prev, next, ratio);
                 }
                 else if (anim.path == "scale")
                 {
-                    glm::vec3 prev = glm::vec3(anim.keyFrameData[prev_idx]);
-                    glm::vec3 next = glm::vec3(anim.keyFrameData[next_idx]);
+                    glm::vec3 prev = glm::make_vec3(anim.keyFrameData.data() + prev_idx * 3);
+                    glm::vec3 next = glm::make_vec3(anim.keyFrameData.data() + next_idx * 3);
                     scale          = prev * (1 - ratio) + next * ratio;
                 }
             }
@@ -720,7 +701,7 @@ public:
         }
         else
         {
-            return node->matrix;
+            return node->getLocalMatrix();
         }
     }
 
@@ -733,8 +714,8 @@ public:
                   bool                   loop)
     {
         // recurrently get the nodeMatrix and let it be the parentMatrix
-        glm::mat4 nodeMatrix = parentMatrix * node->getLocalMatrix();
-        // glm::mat4 nodeMatrix = animatedMatrix(node, 0.0f, loop);
+        // glm::mat4 nodeMatrix = parentMatrix * node->getLocalMatrix();
+        glm::mat4 nodeMatrix = parentMatrix * animatedMatrix(node, 0.0f, loop);
         if (node->mesh.primitives.size() > 0)
         {
             glm::mat4 transInvNodeMatrix     = glm::transpose(glm::inverse(nodeMatrix));
@@ -814,9 +795,7 @@ public:
                           bool                   loop)
     {
         // recurrently get the nodeMatrix and let it be the parentMatrix
-        glm::mat4 nodeMatrix = animatedMatrix(node, time, loop);
-        nodeMatrix           = parentMatrix * nodeMatrix;
-
+        glm::mat4 nodeMatrix             = parentMatrix * animatedMatrix(node, time, loop);
         glm::mat4 transInvNodeMatrix     = glm::transpose(glm::inverse(nodeMatrix));
         glm::mat4 pushConstantMatrixs[2] = {nodeMatrix, transInvNodeMatrix};
 
@@ -1040,17 +1019,17 @@ public:
         vkCmdBindPipeline(
             drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, wireframe ? pipelines.wireframe : pipelines.solid);
 
-        glTFModel.draw(drawCmdBuffers[i], pipelineLayout, frameTimer, true);
-        // if (enableAnimation)
-        // {
-        //     timeline += StepTime() * speed;
-        //     glTFModel.drawAnimated(drawCmdBuffers[i], pipelineLayout, timeline, true);
-        // }
-        // else
-        // {
-        //     StepTime();
-        //     glTFModel.drawAnimated(drawCmdBuffers[i], pipelineLayout, timeline, true);
-        // }
+        // glTFModel.draw(drawCmdBuffers[i], pipelineLayout, frameTimer, true);
+        if (enableAnimation)
+        {
+            timeline += StepTime() * speed;
+            glTFModel.drawAnimated(drawCmdBuffers[i], pipelineLayout, timeline, true);
+        }
+        else
+        {
+            StepTime();
+            glTFModel.drawAnimated(drawCmdBuffers[i], pipelineLayout, timeline, true);
+        }
 
         drawUI(drawCmdBuffers[i]);
         // 结束渲染流程
