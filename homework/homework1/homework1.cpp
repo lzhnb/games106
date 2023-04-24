@@ -31,6 +31,32 @@
 
 #define ENABLE_VALIDATION false
 
+float CurrentTime()
+{
+    static uint64_t start = 0;
+    if (start == 0)
+        start =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+                .count();
+    uint64_t ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count();
+    return (float)(ms - start) / 1000.f;
+}
+
+float DeltaTime()
+{
+    static uint64_t last = 0;
+    uint32_t        current =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count();
+    if (last == 0)
+        last = current;
+    uint64_t ms = current - last;
+    last        = current;
+    return (float)(ms / 1000.f);
+}
+
 // Contains everything required to render a glTF model in Vulkan
 // This class is heavily simplified (compared to glTF's feature set) but retains the basic glTF structure
 class VulkanglTFModel
@@ -629,15 +655,30 @@ public:
         glTF rendering functions
     */
     // hellper function
-    int findFrameIndex(const std::vector<float> key_frame_times, const float time)
+    int findFrameIndex(const std::vector<float>& timeline, float time)
     {
-        int res = 0;
-        while (time > key_frame_times[res])
-            ++res;
-        return res;
+        if (time < timeline[0])
+            return 0;
+        if (time > timeline[timeline.size() - 1])
+            return timeline.size();
+
+        int s = 0, e = timeline.size();
+        while (s < e - 1)
+        {
+            int c = (s + e) / 2;
+            if (timeline[c] < time)
+            {
+                s = c;
+            }
+            else
+            {
+                e = c;
+            }
+        }
+        return e;
     }
 
-    glm::mat4 animatedMatrix(VulkanglTFModel::Node* node, float time)
+    glm::mat4 animatedMatrix(VulkanglTFModel::Node* node, float time, bool loop)
     {
         glm::mat4 res = glm::mat4(1.0f);
         if (animationsDict.count(node->index))
@@ -650,7 +691,7 @@ public:
             for (Animation anim : anims)
             {
                 float maxAnimationTime = anim.max_time;
-                if (time > maxAnimationTime)
+                if (loop)
                 {
                     time = time - glm::floor(time / maxAnimationTime) * maxAnimationTime;
                 }
@@ -691,7 +732,8 @@ public:
                   VkPipelineLayout       pipelineLayout,
                   VulkanglTFModel::Node* node,
                   float                  time,
-                  glm::mat4              parentMatrix)
+                  glm::mat4              parentMatrix,
+                  bool                   loop)
     {
         // recurrently get the nodeMatrix and let it be the parentMatrix
         glm::mat4 nodeMatrix = parentMatrix * node->getLocalMatrix();
@@ -755,12 +797,12 @@ public:
         }
         for (auto& child : node->children)
         {
-            drawNode(commandBuffer, pipelineLayout, child, time, nodeMatrix);
+            drawNode(commandBuffer, pipelineLayout, child, time, nodeMatrix, loop);
         }
     }
 
     // Draw the glTF scene starting at the top-level-nodes
-    void draw(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout, float time)
+    void draw(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout, float time, bool loop)
     {
         // All vertices and indices are stored in single buffers, so we only need to bind once
         VkDeviceSize offsets[1] = {0};
@@ -768,7 +810,19 @@ public:
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertices.buffer, offsets);
         vkCmdBindIndexBuffer(commandBuffer, indices.buffer, 0, VK_INDEX_TYPE_UINT32);
         // Render all nodes at top-level
-        drawNode(commandBuffer, pipelineLayout, rootNode, time, glm::mat4(1.0f));
+        drawNode(commandBuffer, pipelineLayout, rootNode, time, glm::mat4(1.0f), true);
+    }
+
+    // Draw the glTF scene starting at the top-level-nodes
+    void drawAnimated(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout, float time, bool loop)
+    {
+        // All vertices and indices are stored in single buffers, so we only need to bind once
+        VkDeviceSize offsets[1] = {0};
+        // 绑定顶点缓冲和索引缓冲
+        vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertices.buffer, offsets);
+        vkCmdBindIndexBuffer(commandBuffer, indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+        // Render all nodes at top-level
+        drawNode(commandBuffer, pipelineLayout, rootNode, time, glm::mat4(1.0f), true);
     }
 };
 
@@ -898,7 +952,19 @@ public:
         // 绑定图形管线，第二个参数用于指定管线对象是图形管线还是计算管线
         vkCmdBindPipeline(
             drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, wireframe ? pipelines.wireframe : pipelines.solid);
-        glTFModel.draw(drawCmdBuffers[i], pipelineLayout, frameTimer);
+
+        // glTFModel.draw(drawCmdBuffers[i], pipelineLayout, frameTimer, true);
+        if (enableAnimation)
+        {
+            timeline += DeltaTime() * speed;
+            glTFModel.drawAnimated(drawCmdBuffers[i], pipelineLayout, timeline, true);
+        }
+        else
+        {
+            DeltaTime();
+            glTFModel.drawAnimated(drawCmdBuffers[i], pipelineLayout, timeline, true);
+        }
+
         drawUI(drawCmdBuffers[i]);
         // 结束渲染流程
         vkCmdEndRenderPass(drawCmdBuffers[i]);
