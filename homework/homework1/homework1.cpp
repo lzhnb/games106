@@ -151,6 +151,8 @@ public:
         glm::vec3 emissiveFactor  = glm::vec3(1., 1., 1.);
 
         VkDescriptorSet descriptorSet;
+        VkBuffer        buffer;
+        VkDeviceMemory  memory;
     };
 
     // Contains the texture for a single glTF image
@@ -171,18 +173,9 @@ public:
     // Push constant
     struct Factors
     {
-        struct PushBlock
-        {
-            glm::vec4 baseColorFactor;
-            float     metallicFactor;
-            float     roughnessFactor;
-        } params;
-        Factors(glm::vec4 baseColorFactor, float metallicFactor, float roughnessFactor)
-        {
-            params.baseColorFactor = baseColorFactor;
-            params.metallicFactor  = metallicFactor;
-            params.roughnessFactor = roughnessFactor;
-        }
+        glm::vec4 baseColorFactor;
+        glm::vec4 metallicRoughnessFactor;
+        glm::vec4 emissiveFactor;
     };
 
     /*
@@ -764,16 +757,6 @@ public:
             {
                 if (primitive.indexCount > 0)
                 {
-                    // NOTE: support baseColorFactor/metallicFactor/roughnessFactor
-                    Factors factors(materials[primitive.materialIndex].baseColorFactor,
-                                    materials[primitive.materialIndex].metallicFactor,
-                                    materials[primitive.materialIndex].roughnessFactor);
-                    vkCmdPushConstants(commandBuffer,
-                                       pipelineLayout,
-                                       VK_SHADER_STAGE_FRAGMENT_BIT,
-                                       sizeof(pushConstantMatrixs), // NOTE: offset 来保证不修改之前的值
-                                       sizeof(Factors::PushBlock),
-                                       &factors);
                     // Get the texture index for this primitive
                     // VulkanglTFModel::Texture texture =
                     //     textures[materials[primitive.materialIndex].baseColorTextureIndex];
@@ -824,16 +807,6 @@ public:
             {
                 if (primitive.indexCount > 0)
                 {
-                    // NOTE: support baseColorFactor/metallicFactor/roughnessFactor
-                    Factors factors(materials[primitive.materialIndex].baseColorFactor,
-                                    materials[primitive.materialIndex].metallicFactor,
-                                    materials[primitive.materialIndex].roughnessFactor);
-                    vkCmdPushConstants(commandBuffer,
-                                       pipelineLayout,
-                                       VK_SHADER_STAGE_FRAGMENT_BIT,
-                                       sizeof(pushConstantMatrixs), // NOTE: offset 来保证不修改之前的值
-                                       sizeof(Factors::PushBlock),
-                                       &factors);
                     // Get the texture index for this primitive
                     // VulkanglTFModel::Texture texture =
                     //     textures[materials[primitive.materialIndex].baseColorTextureIndex];
@@ -1141,6 +1114,35 @@ public:
 
     void loadAssets() { loadglTFFile(getAssetPath() + "buster_drone/busterDrone.gltf"); }
 
+    void
+    transferDataToDevice(VkBufferUsageFlags usage, void* data, VkDeviceSize size, VkBuffer& buffer, VkDeviceMemory& mem)
+    {
+        VkBuffer       staging;
+        VkDeviceMemory staging_memory;
+
+        VK_CHECK_RESULT(vulkanDevice->createBuffer(
+            usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, size, &buffer, &mem));
+
+        VK_CHECK_RESULT(
+            vulkanDevice->createBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                       size,
+                                       &staging,
+                                       &staging_memory,
+                                       data));
+
+        VkCommandBuffer copyCmd    = vulkanDevice->createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+        VkBufferCopy    copyRegion = {};
+
+        copyRegion.size = size;
+        vkCmdCopyBuffer(copyCmd, staging, buffer, 1, &copyRegion);
+
+        vulkanDevice->flushCommandBuffer(copyCmd, queue, true);
+
+        vkDestroyBuffer(device, staging, nullptr);
+        vkFreeMemory(device, staging_memory, nullptr);
+    }
+
     void setupDescriptors()
     {
         /*
@@ -1149,10 +1151,9 @@ public:
 
         // 定义结构体来对描述符池可以分配的描述符集进行定义
         std::vector<VkDescriptorPoolSize> poolSizes = {
-            vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1),
+            vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1024),
             // One combined image sampler per model image/texture
-            vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                                  static_cast<uint32_t>(glTFModel.images.size())),
+            vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1024),
         };
         // One set for matrices and one per model image/texture
         // 描述符池的大小需要通过 VkDescriptorPoolCreateInfo 结构体定义
@@ -1173,6 +1174,7 @@ public:
         VK_CHECK_RESULT(
             vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCI, nullptr, &descriptorSetLayouts.matrices));
         // Descriptor set layout for passing material textures
+        // NOTE: 要与下面 writeDescriptorSets 相对应！
         VkDescriptorSetLayoutBinding fragmentBindings[] = {
             vks::initializers::descriptorSetLayoutBinding(
                 VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0),
@@ -1180,11 +1182,13 @@ public:
                 VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 1),
             vks::initializers::descriptorSetLayoutBinding(
                 VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 2),
+            vks::initializers::descriptorSetLayoutBinding(
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 3),
+            vks::initializers::descriptorSetLayoutBinding(
+                VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, 4),
         };
         descriptorSetLayoutCI =
             vks::initializers::descriptorSetLayoutCreateInfo(fragmentBindings, _countof(fragmentBindings));
-        setLayoutBinding = vks::initializers::descriptorSetLayoutBinding(
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0);
         VK_CHECK_RESULT(
             vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCI, nullptr, &descriptorSetLayouts.textures));
 
@@ -1192,11 +1196,12 @@ public:
         // 管线布局
         std::array<VkDescriptorSetLayout, 2> setLayouts = {descriptorSetLayouts.matrices,
                                                            descriptorSetLayouts.textures};
-        VkPipelineLayoutCreateInfo           pipelineLayoutCI =
+
+        VkPipelineLayoutCreateInfo pipelineLayoutCI =
             vks::initializers::pipelineLayoutCreateInfo(setLayouts.data(), static_cast<uint32_t>(setLayouts.size()));
         // We will use push constants to push the local matrices of a primitive to the vertex shader
         VkPushConstantRange pushConstantRange =
-            vks::initializers::pushConstantRange(VK_SHADER_STAGE_VERTEX_BIT, sizeof(glm::mat4), 0);
+            vks::initializers::pushConstantRange(VK_SHADER_STAGE_VERTEX_BIT, sizeof(glm::mat4) * 2, 0);
         // Push constant ranges are part of the pipeline layout
         pipelineLayoutCI.pushConstantRangeCount = 1;
         pipelineLayoutCI.pPushConstantRanges    = &pushConstantRange;
@@ -1219,7 +1224,24 @@ public:
                 vks::initializers::descriptorSetAllocateInfo(descriptorPool, &descriptorSetLayouts.textures, 1);
             VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &material.descriptorSet));
 
-            VkWriteDescriptorSet writeDescriptorSets[3];
+            VulkanglTFModel::Factors factors;
+            factors.baseColorFactor         = material.baseColorFactor;
+            factors.emissiveFactor          = glm::vec4(material.emissiveFactor, 1.0f);
+            factors.metallicRoughnessFactor = glm::vec4(material.metallicFactor, material.roughnessFactor, 1.0f, 1.0f);
+
+            transferDataToDevice(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                 &factors,
+                                 sizeof(factors),
+                                 material.buffer,
+                                 material.memory);
+
+            VkDescriptorBufferInfo buffer_info;
+            buffer_info.buffer = material.buffer;
+            buffer_info.offset = 0;
+            buffer_info.range  = sizeof(factors);
+
+            // NOTE: 要与上面 fragmentBindings 相对应！
+            VkWriteDescriptorSet writeDescriptorSets[5];
 
             writeDescriptorSets[0] = vks::initializers::writeDescriptorSet(
                 material.descriptorSet,
@@ -1236,6 +1258,13 @@ public:
                 VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                 2,
                 &glTFModel.images[material.metallicRoughnessTextureIndex].texture.descriptor);
+            writeDescriptorSets[3] = vks::initializers::writeDescriptorSet(
+                material.descriptorSet,
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                3,
+                &glTFModel.images[material.emissiveTextureIndex].texture.descriptor);
+            writeDescriptorSets[4] = vks::initializers::writeDescriptorSet(
+                material.descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4, &buffer_info);
 
             vkUpdateDescriptorSets(device, _countof(writeDescriptorSets), writeDescriptorSets, 0, NULL);
         }
