@@ -141,13 +141,15 @@ public:
     // A glTF material stores information in e.g. the texture that is attached to it and colors
     struct Material
     {
-        glm::vec4       baseColorFactor = glm::vec4(1.0f);
-        uint32_t        baseColorTextureIndex;
-        uint32_t        normalTextureIndex;
-        uint32_t        occlusionTextureIndex;
-        uint32_t        metallicRoughnessTextureIndex;
-        float           metallicFactor  = 1.0f;
-        float           roughnessFactor = 1.0f;
+        glm::vec4 baseColorFactor = glm::vec4(1.0f);
+        uint32_t  baseColorTextureIndex;
+        uint32_t  normalTextureIndex;
+        uint32_t  metallicRoughnessTextureIndex;
+        uint32_t  emissiveTextureIndex;
+        float     metallicFactor  = 1.0f;
+        float     roughnessFactor = 1.0f;
+        glm::vec3 emissiveFactor  = glm::vec3(1., 1., 1.);
+
         VkDescriptorSet descriptorSet;
     };
 
@@ -186,6 +188,9 @@ public:
     /*
         Model data
     */
+    uint32_t              defaultTextureMapIndex;
+    uint32_t              defaultNormalMapIndex;
+    uint32_t              defaultEmissiveMapIndex;
     std::vector<Image>    images;
     std::vector<Texture>  textures;
     std::vector<Material> materials;
@@ -267,6 +272,25 @@ public:
                 delete[] buffer;
             }
         }
+
+        uint8_t white[4] = {255, 255, 255, 255};
+        Image   whiteImage;
+        whiteImage.texture.fromBuffer(white, sizeof(white), VK_FORMAT_R8G8B8A8_UNORM, 1, 1, vulkanDevice, copyQueue);
+        images.push_back(whiteImage);
+        defaultTextureMapIndex = uint32_t(images.size() - 1);
+
+        uint8_t blue[4] = {0, 0, 255, 255};
+        Image   defaultNormalImage;
+        defaultNormalImage.texture.fromBuffer(
+            blue, sizeof(blue), VK_FORMAT_R8G8B8A8_UNORM, 1, 1, vulkanDevice, copyQueue);
+        images.push_back(defaultNormalImage);
+        defaultNormalMapIndex = uint32_t(images.size() - 1);
+
+        uint8_t black[4] = {0, 0, 0, 255};
+        Image   blackImage;
+        blackImage.texture.fromBuffer(black, sizeof(black), VK_FORMAT_R8G8B8A8_UNORM, 1, 1, vulkanDevice, copyQueue);
+        images.push_back(blackImage);
+        defaultEmissiveMapIndex = uint32_t(images.size() - 1);
     }
 
     void loadTextures(tinygltf::Model& input)
@@ -296,19 +320,36 @@ public:
             {
                 materials[i].baseColorTextureIndex = glTFMaterial.values["baseColorTexture"].TextureIndex();
             }
+            else
+            {
+                materials[i].baseColorTextureIndex = defaultTextureMapIndex;
+            }
             // NOTE: external for PBR material
             if (glTFMaterial.values.find("metallicRoughnessTexture") != glTFMaterial.values.end())
             {
                 materials[i].metallicRoughnessTextureIndex =
                     glTFMaterial.values["metallicRoughnessTexture"].TextureIndex();
             }
-            if (glTFMaterial.normalTexture.index)
+            else
+            {
+                materials[i].metallicRoughnessTextureIndex = defaultTextureMapIndex;
+            }
+            if (glTFMaterial.normalTexture.index < 0)
+            {
+                materials[i].normalTextureIndex = defaultNormalMapIndex;
+            }
+            else
             {
                 materials[i].normalTextureIndex = glTFMaterial.normalTexture.index;
             }
-            if (glTFMaterial.occlusionTexture.index)
+            materials[i].emissiveFactor = glm::make_vec3(glTFMaterial.emissiveFactor.data());
+            if (glTFMaterial.emissiveTexture.index < 0)
             {
-                materials[i].occlusionTextureIndex = glTFMaterial.occlusionTexture.index;
+                materials[i].emissiveTextureIndex = defaultEmissiveMapIndex;
+            }
+            else
+            {
+                materials[i].emissiveTextureIndex = glTFMaterial.emissiveTexture.index;
             }
             if (glTFMaterial.values.find("roughnessFactor") != glTFMaterial.values.end())
             {
@@ -1196,7 +1237,7 @@ public:
                 2,
                 &glTFModel.images[material.metallicRoughnessTextureIndex].texture.descriptor);
 
-            vkUpdateDescriptorSets(device, 3, writeDescriptorSets, 0, NULL);
+            vkUpdateDescriptorSets(device, _countof(writeDescriptorSets), writeDescriptorSets, 0, NULL);
         }
     }
 

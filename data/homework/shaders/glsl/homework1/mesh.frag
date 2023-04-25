@@ -2,7 +2,7 @@
 
 layout (set = 1, binding = 0) uniform sampler2D samplerColorMap;
 layout (set = 1, binding = 1) uniform sampler2D samplerNormalMap;
-layout (set = 1, binding = 2) uniform sampler2D samplerBRDFMap;
+layout (set = 1, binding = 2) uniform sampler2D samplerMetallicRoughnessMap;
 
 layout (location = 0) in vec3 inNormal;
 layout (location = 1) in vec3 inColor;
@@ -87,7 +87,7 @@ void main()
 {
 	vec3 albedo = texture(samplerColorMap, inUV).rgb;
 	vec3 normal = texture(samplerNormalMap, inUV).rgb;
-	vec3 metallic_roughtness = texture(samplerBRDFMap, inUV).rgb;
+	vec3 metallic_roughtness = texture(samplerMetallicRoughnessMap, inUV).rgb;
 	float metallic = metallic_roughtness.b;
 	float roughness = metallic_roughtness.g;
 	normal = normalize(normal * 2.0 - 1.0);
