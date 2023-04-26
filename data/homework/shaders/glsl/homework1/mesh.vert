@@ -17,8 +17,9 @@ uboScene;
 
 layout(push_constant) uniform PushConsts
 {
-    mat4 model;
-    mat4 transInvModel;
+    mat4  model;
+    mat4  transInvModel;
+    float emissiveStrength;
 }
 primitive;
 
